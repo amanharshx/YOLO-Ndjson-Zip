@@ -1,10 +1,14 @@
+import { useState } from "react";
+import { WelcomeScreen } from "@/components/welcome-screen";
+
 function App() {
-  return (
-    <div>
-      <h1>YOLO NDJSON Converter</h1>
-      <p>Coming soon...</p>
-    </div>
-  );
+  const [showConverter, setShowConverter] = useState(false);
+
+  if (showConverter) {
+    return <div>Converter coming soon...</div>;
+  }
+
+  return <WelcomeScreen onGetStarted={() => setShowConverter(true)} />;
 }
 
 export default App;
