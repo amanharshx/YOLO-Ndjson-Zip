@@ -1,3 +1,6 @@
+pub mod coco;
+pub mod createml;
+pub mod pascal_voc;
 pub mod yolo;
 
 use crate::parser::NDJSONData;
@@ -10,6 +13,10 @@ pub trait Converter {
 pub fn get_converter(format: &str) -> Option<Box<dyn Converter + Send + Sync>> {
     match format.to_lowercase().as_str() {
         "yolo" => Some(Box::new(yolo::YoloConverter::new())),
+        "yolo_darknet" => Some(Box::new(yolo::YoloConverter::new_darknet())),
+        "coco" => Some(Box::new(coco::CocoConverter::new())),
+        "pascal_voc" | "voc" => Some(Box::new(pascal_voc::PascalVocConverter::new())),
+        "createml" => Some(Box::new(createml::CreateMlConverter::new())),
         _ => None,
     }
 }
