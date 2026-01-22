@@ -1,10 +1,21 @@
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
 import { formats } from "@/lib/types";
 import { useConverter } from "@/hooks/use-converter";
 import { ConverterHeader } from "@/components/converter-header";
 import { FormatButton } from "@/components/format-button";
-import { FileJson, X, Upload, Download } from "lucide-react";
+import {
+  FileJson,
+  X,
+  Upload,
+  Check,
+  Loader2,
+  Clock,
+  Download,
+  FolderOpen,
+} from "lucide-react";
 
 export function ConverterScreen({ onBack }: { onBack: () => void }) {
   const {
@@ -12,10 +23,21 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
     selectedFileName,
     selectedFormat,
     setSelectedFormat,
+    isConverting,
+    progress,
+    result,
+    error,
+    elapsedSeconds,
     selectFile,
     removeFile,
+    handleConvert,
+    resetState,
+    getProgressPercentage,
+    formatElapsedTime,
+    getDownloadRate,
   } = useConverter();
 
+  // When no file selected, show centered upload card
   if (!selectedFile) {
     return (
       <div className="flex min-h-screen flex-col bg-background">
@@ -54,6 +76,7 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
       <ConverterHeader onBack={onBack} />
 
       <main className="container mx-auto px-4 py-8">
+        {/* Main Content */}
         <div className="mx-auto max-w-2xl space-y-6">
           {/* File Upload */}
           <Card className="p-6">
@@ -81,26 +104,133 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
           </Card>
 
           {/* Format Selector */}
-          <div className="space-y-3">
-            <h3 className="text-lg font-semibold">Popular Download Formats</h3>
-            <div className="flex flex-wrap gap-2">
-              {formats.map((format) => (
-                <FormatButton
-                  key={format.name}
-                  format={format}
-                  isSelected={selectedFormat?.name === format.name}
-                  disabled={!format.available}
-                  onClick={() => format.available && setSelectedFormat(format)}
-                />
-              ))}
+          {selectedFile && (
+            <div className="space-y-3">
+              <h3 className="text-lg font-semibold">Popular Download Formats</h3>
+              <div className="flex flex-wrap gap-2">
+                {formats.map((format) => (
+                  <FormatButton
+                    key={format.name}
+                    format={format}
+                    isSelected={selectedFormat?.name === format.name}
+                    disabled={!format.available || isConverting || !!result}
+                    onClick={() => format.available && !isConverting && !result && setSelectedFormat(format)}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
-          {/* Convert Button */}
+          {/* Convert Button & Progress */}
           {selectedFormat && (
-            <Button className="w-full py-6 text-lg" size="lg">
-              Convert to {selectedFormat.name}
-            </Button>
+            <div className="space-y-4">
+              {!result ? (
+                <>
+                  {/* Progress bar above convert button */}
+                  {isConverting && progress && (
+                    <Card className="space-y-4 p-4">
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-sm">
+                          <span className="font-medium">
+                            {progress.phase === "downloading"
+                              ? "Downloading Images"
+                              : progress.phase === "converting"
+                                ? "Converting Annotations"
+                                : progress.phase === "zipping"
+                                  ? "Creating ZIP"
+                                  : progress.phase === "parsing"
+                                    ? "Parsing NDJSON"
+                                    : "Processing"}
+                          </span>
+                          <span className="text-muted-foreground">
+                            {progress.current} / {progress.total}
+                          </span>
+                        </div>
+                        <Progress value={getProgressPercentage()} />
+                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                          <span className="flex-1 truncate">
+                            {progress.item || "\u00A0"}
+                          </span>
+                          <div className="ml-2 flex shrink-0 items-center gap-3">
+                            <span className="flex items-center gap-1">
+                              <Clock className="h-3 w-3" />
+                              {formatElapsedTime(elapsedSeconds)}
+                            </span>
+                            {progress.phase === "downloading" && (
+                              <span>{getDownloadRate()} img/s</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </Card>
+                  )}
+
+                  <Button
+                    onClick={handleConvert}
+                    disabled={isConverting}
+                    className="w-full py-6 text-lg"
+                    size="lg"
+                  >
+                    {isConverting ? (
+                      <>
+                        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                        {progress?.phase === "downloading"
+                          ? "Downloading Images..."
+                          : progress?.phase === "converting"
+                            ? "Converting..."
+                            : progress?.phase === "zipping"
+                              ? "Creating ZIP..."
+                              : "Starting..."}
+                      </>
+                    ) : (
+                      "Convert to " + selectedFormat.name
+                    )}
+                  </Button>
+                </>
+              ) : (
+                <div className="space-y-4">
+                  <Card className="bg-primary/5 p-6">
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/20">
+                        <Check className="h-5 w-5 text-primary" />
+                      </div>
+                      <div>
+                        <p className="font-semibold text-foreground">ZIP Downloaded</p>
+                        <p className="text-sm text-muted-foreground">Your converted dataset is ready</p>
+                      </div>
+                    </div>
+                    <div className="rounded-lg bg-background/50 p-3">
+                      <p className="text-xs text-muted-foreground mb-1">Saved to:</p>
+                      <p className="text-sm font-mono text-foreground break-all">
+                        {result.zip_path}
+                      </p>
+                    </div>
+                    <Button
+                      onClick={() => revealItemInDir(result.zip_path)}
+                      variant="outline"
+                      className="w-full mt-4"
+                    >
+                      <FolderOpen className="mr-2 h-4 w-4" />
+                      {navigator.platform.includes("Win") ? "Show in Explorer" : navigator.platform.includes("Mac") ? "Show in Finder" : "Show in Files"}
+                    </Button>
+                  </Card>
+                  <Button
+                    onClick={resetState}
+                    className="w-full py-6 text-lg"
+                    size="lg"
+                  >
+                    Convert Another File
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Error Display */}
+          {error && (
+            <Card className="bg-destructive/10 p-4 text-center">
+              <p className="font-medium text-destructive">{error}</p>
+            </Card>
           )}
         </div>
       </main>
