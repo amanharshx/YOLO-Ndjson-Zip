@@ -1,11 +1,15 @@
 import { Button } from "@/components/ui/button";
 import { formatBadges } from "@/lib/types";
 import { Zap, Layers, Lock, ArrowRight } from "lucide-react";
+import { UpdateChecker } from "./update-checker";
 import appIcon from "../../assets/icon2.png";
 
 export function WelcomeScreen({ onGetStarted }: { onGetStarted: () => void }) {
   return (
-    <div className="flex min-h-screen">
+    <div className="relative flex min-h-screen">
+      <div className="absolute top-4 right-4">
+        <UpdateChecker />
+      </div>
       {/* Left Side - Branding */}
       <div className="flex flex-1 flex-col items-center justify-center bg-primary/5 px-12 py-8">
         <div className="flex flex-col items-center max-w-lg">

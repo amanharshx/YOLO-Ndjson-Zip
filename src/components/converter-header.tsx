@@ -1,4 +1,5 @@
 import { ArrowRight } from "lucide-react";
+import { UpdateChecker } from "./update-checker";
 
 export function ConverterHeader({ onBack }: { onBack: () => void }) {
   return (
@@ -12,7 +13,7 @@ export function ConverterHeader({ onBack }: { onBack: () => void }) {
           Back
         </button>
         <div />
-        <div className="w-16" />
+        <UpdateChecker />
       </div>
     </header>
   );

@@ -1,6 +1,6 @@
 {
   "name": "ndjson-converter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Desktop app for converting NDJSON annotation exports to ML formats",
   "license": "MIT",
   "author": "amanharshx",
@@ -26,7 +26,9 @@
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-dialog": "^2",
-    "@tauri-apps/plugin-fs": "^2"
+    "@tauri-apps/plugin-fs": "^2",
+    "@tauri-apps/plugin-updater": "^2",
+    "@tauri-apps/plugin-process": "^2"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.18",
