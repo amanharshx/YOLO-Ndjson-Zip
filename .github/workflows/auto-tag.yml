@@ -18,6 +18,7 @@ jobs:
     if: github.actor != 'github-actions[bot]'
     permissions:
       contents: write
+      actions: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,3 +59,9 @@ jobs:
         run: |
           git tag -a "${{ steps.version.outputs.version }}" -m "Release ${{ steps.version.outputs.version }}"
           git push origin "${{ steps.version.outputs.version }}"
+
+      - name: Trigger release workflow
+        if: steps.check.outputs.exists == 'false'
+        run: gh workflow run release.yml -f tag=${{ steps.version.outputs.version }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

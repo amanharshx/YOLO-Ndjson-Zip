@@ -9,7 +9,7 @@ function App() {
     return <ConverterScreen onBack={() => setShowConverter(false)} />;
   }
 
-  return <WelcomeScreen onGetStarted={() => setShowConverter(true)} />;
+  return <WelcomeScreen onGetStarted={() => setShowConverter(true)}  />;
 }
 
 export default App;
