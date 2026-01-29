@@ -11,7 +11,7 @@ export function ConverterHeader({ onBack }: { onBack: () => void }) {
         >
           <ArrowRight className="h-4 w-4 rotate-180" />
           Back
-        </button.>
+        </button>
         <div />
         <UpdateChecker />
       </div>
