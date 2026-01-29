@@ -1,6 +1,6 @@
 {
   "name": "ndjson-converter",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Desktop app for converting NDJSON annotation exports to ML formats",
   "license": "MIT",
   "author": "amanharshx",
@@ -12,7 +12,16 @@
   "bugs": {
     "url": "https://github.com/amanharshx/yolo-ndjson-zip/issues"
   },
-  "keywords": ["ndjson", "converter", "yolo", "coco", "pascal-voc", "tauri", "machine-learning", "annotation"],
+  "keywords": [
+    "ndjson",
+    "converter",
+    "yolo",
+    "coco",
+    "pascal-voc",
+    "tauri",
+    "machine-learning",
+    "annotation"
+  ],
   "type": "module",
   "scripts": {
     "dev": "vite",
