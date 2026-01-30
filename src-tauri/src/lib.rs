@@ -28,8 +28,8 @@ async fn convert_ndjson(
     channel: Channel<ProgressEvent>,
 ) -> Result<ConvertResult, String> {
     // Read the NDJSON file
-    let content = std::fs::read_to_string(&file_path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let content =
+        std::fs::read_to_string(&file_path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     // Parse NDJSON
     channel
@@ -63,8 +63,7 @@ async fn convert_ndjson(
     let image_count = downloaded_images.len();
 
     // Get converter
-    let converter = get_converter(&format)
-        .ok_or_else(|| format!("Unknown format: {}", format))?;
+    let converter = get_converter(&format).ok_or_else(|| format!("Unknown format: {}", format))?;
 
     // Convert
     channel

@@ -33,7 +33,11 @@ impl YoloConverter {
 
         if task == "pose" {
             if let Some(kpt_shape) = &data.metadata.kpt_shape {
-                yaml.push_str(&format!("kpt_shape: [{}, {}]\n", kpt_shape[0], kpt_shape.get(1).unwrap_or(&2)));
+                yaml.push_str(&format!(
+                    "kpt_shape: [{}, {}]\n",
+                    kpt_shape[0],
+                    kpt_shape.get(1).unwrap_or(&2)
+                ));
             }
         }
 
@@ -92,23 +96,35 @@ impl YoloConverter {
             .collect::<Vec<_>>()
             .join("\n")
     }
-
 }
 
 impl Converter for YoloConverter {
-    fn convert(&self, data: &NDJSONData, downloaded_images: &HashMap<String, Vec<u8>>) -> HashMap<String, Vec<u8>> {
+    fn convert(
+        &self,
+        data: &NDJSONData,
+        downloaded_images: &HashMap<String, Vec<u8>>,
+    ) -> HashMap<String, Vec<u8>> {
         let mut files: HashMap<String, Vec<u8>> = HashMap::new();
         let task = &data.metadata.task;
 
         if self.darknet {
             // Darknet mode: _darknet.labels instead of data.yaml/classes.txt
             let class_list = get_class_list(data);
-            files.insert("_darknet.labels".to_string(), class_list.join("\n").into_bytes());
+            files.insert(
+                "_darknet.labels".to_string(),
+                class_list.join("\n").into_bytes(),
+            );
         } else {
             // Standard YOLO mode
-            files.insert("data.yaml".to_string(), self.create_data_yaml(data).into_bytes());
+            files.insert(
+                "data.yaml".to_string(),
+                self.create_data_yaml(data).into_bytes(),
+            );
             let class_list = get_class_list(data);
-            files.insert("classes.txt".to_string(), class_list.join("\n").into_bytes());
+            files.insert(
+                "classes.txt".to_string(),
+                class_list.join("\n").into_bytes(),
+            );
         }
 
         let kpt_shape = data.metadata.kpt_shape.as_deref();
@@ -137,7 +153,10 @@ impl Converter for YoloConverter {
                                 .unwrap_or_else(|| format!("class_{}", class_id));
 
                             if let Some(image_data) = downloaded_images.get(&img.file) {
-                                files.insert(format!("{}/{}/{}", split, class_name, img.file), image_data.clone());
+                                files.insert(
+                                    format!("{}/{}/{}", split, class_name, img.file),
+                                    image_data.clone(),
+                                );
                             }
                         }
                         continue;
@@ -145,7 +164,11 @@ impl Converter for YoloConverter {
                     _ => self.create_detection_label(img),
                 };
 
-                let label_filename = img.file.rsplit_once('.').map(|(name, _)| name).unwrap_or(&img.file);
+                let label_filename = img
+                    .file
+                    .rsplit_once('.')
+                    .map(|(name, _)| name)
+                    .unwrap_or(&img.file);
 
                 if self.darknet {
                     // Darknet: flat structure, images + labels side by side in {split}/

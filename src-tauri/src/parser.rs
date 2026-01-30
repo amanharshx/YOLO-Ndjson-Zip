@@ -216,7 +216,6 @@ impl ImageEntry {
             })
             .collect()
     }
-
 }
 
 #[derive(Debug, Clone)]
@@ -227,7 +226,10 @@ pub struct NDJSONData {
 
 impl NDJSONData {
     pub fn train_images(&self) -> Vec<&ImageEntry> {
-        self.images.iter().filter(|img| img.split == "train").collect()
+        self.images
+            .iter()
+            .filter(|img| img.split == "train")
+            .collect()
     }
 
     pub fn valid_images(&self) -> Vec<&ImageEntry> {
@@ -238,7 +240,10 @@ impl NDJSONData {
     }
 
     pub fn test_images(&self) -> Vec<&ImageEntry> {
-        self.images.iter().filter(|img| img.split == "test").collect()
+        self.images
+            .iter()
+            .filter(|img| img.split == "test")
+            .collect()
     }
 }
 

@@ -38,7 +38,11 @@ impl CreateMlConverter {
         Self
     }
 
-    fn create_createml_json(&self, images: &[&ImageEntry], class_names: &HashMap<i32, String>) -> String {
+    fn create_createml_json(
+        &self,
+        images: &[&ImageEntry],
+        class_names: &HashMap<i32, String>,
+    ) -> String {
         let result: Vec<CreateMlImage> = images
             .iter()
             .map(|img| {
@@ -74,7 +78,11 @@ impl CreateMlConverter {
         serde_json::to_string_pretty(&result).unwrap_or_default()
     }
 
-    fn create_createml_classification_json(&self, images: &[&ImageEntry], class_names: &HashMap<i32, String>) -> String {
+    fn create_createml_classification_json(
+        &self,
+        images: &[&ImageEntry],
+        class_names: &HashMap<i32, String>,
+    ) -> String {
         let result: Vec<CreateMlClassification> = images
             .iter()
             .filter_map(|img| {
@@ -96,7 +104,11 @@ impl CreateMlConverter {
 }
 
 impl Converter for CreateMlConverter {
-    fn convert(&self, data: &NDJSONData, downloaded_images: &HashMap<String, Vec<u8>>) -> HashMap<String, Vec<u8>> {
+    fn convert(
+        &self,
+        data: &NDJSONData,
+        downloaded_images: &HashMap<String, Vec<u8>>,
+    ) -> HashMap<String, Vec<u8>> {
         let mut files: HashMap<String, Vec<u8>> = HashMap::new();
         let class_names = get_class_names(data);
         let task = &data.metadata.task;
