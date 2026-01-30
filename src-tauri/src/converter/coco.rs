@@ -237,7 +237,11 @@ impl CocoConverter {
 }
 
 impl Converter for CocoConverter {
-    fn convert(&self, data: &NDJSONData, downloaded_images: &HashMap<String, Vec<u8>>) -> HashMap<String, Vec<u8>> {
+    fn convert(
+        &self,
+        data: &NDJSONData,
+        downloaded_images: &HashMap<String, Vec<u8>>,
+    ) -> HashMap<String, Vec<u8>> {
         let mut files: HashMap<String, Vec<u8>> = HashMap::new();
 
         let splits = [

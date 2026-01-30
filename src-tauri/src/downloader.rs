@@ -29,7 +29,10 @@ impl Downloader {
             .build()
             .expect("Failed to create HTTP client");
 
-        Self { client, concurrency }
+        Self {
+            client,
+            concurrency,
+        }
     }
 
     pub async fn download_all(
