@@ -2,5 +2,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    let _guard = option_env!("SENTRY_DSN_BACKEND").map(|dsn| {
+        sentry::init((
+            dsn,
+            sentry::ClientOptions {
+                release: sentry::release_name!(),
+                send_default_pii: true,
+                ..Default::default()
+            },
+        ))
+    });
+
     ndjson_converter_lib::run()
 }
