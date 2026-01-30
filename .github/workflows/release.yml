@@ -61,6 +61,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Create release config with signing pubkey
+        shell: bash
         env:
           PUBKEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
         run: |
