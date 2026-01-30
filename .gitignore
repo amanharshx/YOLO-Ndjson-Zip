@@ -7,15 +7,16 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+node_modules/
+dist/
+dist-ssr/
+coverage/
 *.local
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
-.idea
+.idea/
 .DS_Store
 *.suo
 *.ntvs*
@@ -23,6 +24,22 @@ dist-ssr
 *.sln
 *.sw?
 
+.env
+.env.*
+!.env.example
+
+.bun/
+
 # Tauri
 src-tauri/target/
 src-tauri/gen/
+src-tauri/tauri.release.conf.json
+
+target/
+**/*.rs.bk
+
+.turbo/
+.vercel/
+.netlify/
+.eslintcache
+.stylelintcache

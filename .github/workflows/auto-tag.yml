@@ -76,7 +76,11 @@ jobs:
 
           perl -pi -e "s/^version = \\\".*\\\"/version = \\\"${{ steps.version.outputs.new_version }}\\\"/" src-tauri/Cargo.toml
 
-          git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
+          # keep Cargo.lock in sync (update this crate's version entry)
+          NEW_VER="${{ steps.version.outputs.new_version }}"
+          perl -i -pe 'if ($seen) { s/^version = "[^"]+"/version = "'"$NEW_VER"'"/; $seen=0 } $seen=1 if /^name = "ndjson-converter"$/;' src-tauri/Cargo.lock
+
+          git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
           git commit -m "chore: bump version to ${{ steps.version.outputs.tag }}"
 
           git push -u origin "$BRANCH"

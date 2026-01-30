@@ -57,6 +57,10 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
+      - name: Create release config with signing pubkey
+        run: |
+          echo '{"plugins":{"updater":{"pubkey":"${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}"}},"bundle":{"createUpdaterArtifacts":true}}' > src-tauri/tauri.release.conf.json
+
       - name: Build and release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -70,3 +74,4 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+          configPath: src-tauri/tauri.release.conf.json

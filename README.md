@@ -79,6 +79,19 @@ Or: Right-click the `.exe` → **Properties** → Check **"Unblock"** → **Appl
 
 </details>
 
+### Auto Updates
+
+The app supports automatic updates.
+
+When a new version is released:
+
+1. Open the app
+2. Click **Updates** (top right)
+3. If a new version is available, click **Update**
+4. Restart the app to finish installing
+
+Updates are downloaded securely from GitHub Releases and verified using cryptographic signatures.
+
 ### Build from Source
 
 **Prerequisites:** [Rust](https://rustup.rs/), [Bun](https://bun.sh/), [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/)
@@ -88,8 +101,10 @@ git clone https://github.com/amanharshx/yolo-ndjson-zip.git
 cd yolo-ndjson-zip
 bun install
 bun run tauri dev        # development
-bun run tauri build      # production binary
+bun run tauri build      # local production build
 ```
+
+> **Note:** Local builds are unsigned and intended for development only. Official signed builds are generated automatically via GitHub Releases.
 
 ## NDJSON Input Format
 
@@ -106,6 +121,22 @@ The app expects newline-delimited JSON with this structure:
 - **Frontend** - React 19 + TypeScript, Tailwind CSS, Vite
 - **Backend** - Rust + Tauri v2
 - **Package Manager** - Bun
+
+## Releases & Versioning
+
+This project uses automated releases.
+
+- Versions follow semantic versioning (`MAJOR.MINOR.PATCH`)
+- Merging changes into `main` automatically prepares the next release
+- Releases are built and published via GitHub Actions
+
+All official binaries are available on the [GitHub Releases](https://github.com/amanharshx/yolo-ndjson-zip/releases) page.
+
+## Update Security
+
+All releases are cryptographically signed.
+
+The built-in updater verifies signatures before installing updates to ensure authenticity and prevent tampering.
 
 ## Contributing
 
