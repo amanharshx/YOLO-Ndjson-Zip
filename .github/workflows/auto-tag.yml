@@ -1,5 +1,9 @@
 name: Auto Tag
 
+run-name: >
+  Prepare Release • ${{ github.ref_name }} •
+  ${{ github.actor }}
+
 on:
   push:
     branches: [main]

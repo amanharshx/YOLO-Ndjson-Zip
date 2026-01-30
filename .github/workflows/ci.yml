@@ -1,12 +1,48 @@
 name: CI
 
+run-name: >
+  CI • ${{ github.event_name }} •
+  ${{ github.ref_name }} •
+  ${{ github.actor }}
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
+# Cancel old runs if new commits are pushed
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Detect what changed
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            frontend:
+              - 'src/**'
+              - 'public/**'
+              - 'index.html'
+              - 'vite.config.ts'
+              - 'package.json'
+              - 'bun.lock'
+
+            rust:
+              - 'src-tauri/**'
+
+  # Block dist/ changes in PRs
   no-dist-changes:
     name: Block dist/ changes
     if: github.event_name == 'pull_request'
@@ -23,14 +59,26 @@ jobs:
             exit 1
           fi
 
+  # Frontend checks
   frontend:
     name: Frontend Check
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+
+      - name: Cache Bun
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -38,21 +86,30 @@ jobs:
       - name: Type-check and build
         run: bun run build
 
+  # Rust checks
   rust:
     name: Rust Check
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -62,7 +119,12 @@ jobs:
             ~/.cargo/git
             src-tauri/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Format check
+        working-directory: src-tauri
+        run: cargo fmt -- --check
 
       - name: Clippy
         working-directory: src-tauri
@@ -71,3 +133,17 @@ jobs:
       - name: Test
         working-directory: src-tauri
         run: cargo test
+
+  ci-pass:
+    name: CI Pass
+    if: always()
+    needs: [frontend, rust, no-dist-changes]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all required jobs passed
+        run: |
+          if [[ "${{ needs.frontend.result }}" == "failure" || "${{ needs.rust.result }}" == "failure" || "${{ needs.no-dist-changes.result }}" == "failure" ]]; then
+            echo "One or more required CI jobs failed."
+            exit 1
+          fi
+          echo "All required CI jobs passed."
