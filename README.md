@@ -6,6 +6,7 @@
 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)](#installation)
+[![Homebrew](https://img.shields.io/badge/Homebrew-tap-FBB040?logo=homebrew)](https://github.com/amanharshx/homebrew-tap)
 [![Built with Tauri](https://img.shields.io/badge/Built%20with-Tauri%20v2-ffc131.svg)](https://v2.tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-%23dea584.svg?logo=rust&logoColor=black)](#tech-stack)
 [![TypeScript](https://img.shields.io/badge/TypeScript-%23007ACC.svg?logo=typescript&logoColor=white)](#tech-stack)
@@ -15,6 +16,9 @@
 <img src="assets/screenshot.png" width="720" alt="YOLO NDJSON Converter welcome screen">
 
 </div>
+<br>
+
+[**YOLO NDJSON Converter**](https://yolondjson.zip) is a desktop app that converts [Ultralytics](https://www.ultralytics.com/) YOLO's NDJSON annotation exports into ready-to-use datasets for YOLO, COCO, Pascal VOC, and other ML formats. Select your file, pick a format, and get a ZIP with images, labels, and config files.
 
 ## Features
 
@@ -46,15 +50,22 @@
 
 ### Quick Install
 
-**macOS / Linux:**
+**macOS / Linux / Windows (WSL):**
 
 ```bash
-curl -fsSL https://yolondjson.zip/install.sh | bash
+curl -fsSL https://yolondjson.zip/install.sh | sh
+```
+
+**Or, macOS (Homebrew):**
+
+```bash
+brew tap amanharshx/tap
+brew install --cask yolo-ndjson-converter
 ```
 
 Or download the latest release directly from [GitHub Releases](https://github.com/amanharshx/yolo-ndjson-zip/releases).
 
-### Platform Notes
+### Troubleshooting
 
 > **Note:** The app is not yet code-signed (Apple Developer account costs $99/year, Windows EV certificate ~$300/year). I'm planning to get these when I can afford them. For now, you may see security warnings:
 
