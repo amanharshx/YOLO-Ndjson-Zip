@@ -1,6 +1,6 @@
 [package]
 name = "ndjson-converter"
-version = "0.3.0"
+version = "0.3.1"
 description = "NDJSON to ML Annotation Format Converter"
 authors = ["amanharshx"]
 license = "MIT"
