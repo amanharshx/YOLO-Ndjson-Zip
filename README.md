@@ -50,13 +50,19 @@
 
 ### Quick Install
 
-**macOS / Linux / Windows (WSL):**
+**Windows (PowerShell):**
+
+```powershell
+irm https://yolondjson.zip/install.ps1 | iex
+```
+
+**macOS / Linux:**
 
 ```bash
 curl -fsSL https://yolondjson.zip/install.sh | sh
 ```
 
-**Or, macOS (Homebrew):**
+**macOS (Homebrew):**
 
 ```bash
 brew tap amanharshx/tap
