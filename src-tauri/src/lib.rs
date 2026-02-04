@@ -133,8 +133,13 @@ async fn convert_ndjson(
         .ok();
 
     let output_path = PathBuf::from(&output_path);
-    let file = std::fs::File::create(&output_path)
-        .map_err(|e| format!("Failed to create output file '{}': {}", output_path.display(), e))?;
+    let file = std::fs::File::create(&output_path).map_err(|e| {
+        format!(
+            "Failed to create output file '{}': {}",
+            output_path.display(),
+            e
+        )
+    })?;
 
     let zip_result = (|| -> Result<(), String> {
         let mut zip = ZipWriter::new(file);
@@ -206,8 +211,14 @@ mod tests {
 
     #[test]
     fn normalize_zip_path_accepts_simple_paths() {
-        assert_eq!(normalize_zip_path("images/foo.jpg").unwrap(), "images/foo.jpg");
-        assert_eq!(normalize_zip_path("labels\\foo.txt").unwrap(), "labels/foo.txt");
+        assert_eq!(
+            normalize_zip_path("images/foo.jpg").unwrap(),
+            "images/foo.jpg"
+        );
+        assert_eq!(
+            normalize_zip_path("labels\\foo.txt").unwrap(),
+            "labels/foo.txt"
+        );
     }
 
     #[test]
