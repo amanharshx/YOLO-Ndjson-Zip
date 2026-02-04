@@ -8,7 +8,7 @@
       "endpoints": [
         "https://github.com/amanharshx/yolo-ndjson-zip/releases/latest/download/latest.json"
       ],
-      "pubkey": ""
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVCNThBNTYxMjM1MDFDRTAKUldUZ0hGQWpZYVZZVytKczA2TEZKbysrYUpSaXJUQm96djdqK0FWbXV3b2l4bGN0TTkxMGFhRUoK"
     }
   },
   "build": {
@@ -31,11 +31,12 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self' asset:; img-src 'self' asset: data: blob:; connect-src 'self' ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'"
     }
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
