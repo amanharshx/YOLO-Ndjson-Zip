@@ -27,6 +27,15 @@ fn normalize_zip_path(path: &str) -> Result<String, String> {
     }
 
     let normalized = path.replace('\\', "/");
+    if normalized.starts_with("//") {
+        return Err(format!("Invalid ZIP entry path: {}", path));
+    }
+    if normalized.len() >= 2 {
+        let bytes = normalized.as_bytes();
+        if bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+            return Err(format!("Invalid ZIP entry path: {}", path));
+        }
+    }
     for component in Path::new(&normalized).components() {
         match component {
             std::path::Component::Normal(_) | std::path::Component::CurDir => {}
