@@ -1,5 +1,7 @@
+export type ProgressPhase = "downloading" | "converting" | "zipping" | "parsing" | "complete";
+
 export interface ProgressEvent {
-  phase: string;
+  phase: ProgressPhase;
   current: number;
   total: number;
   item: string | null;
@@ -9,6 +11,8 @@ export interface ConvertResult {
   zip_path: string;
   file_count: number;
   image_count: number;
+  download_total: number;
+  failed_downloads: number;
 }
 
 export interface Format {

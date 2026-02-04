@@ -96,7 +96,7 @@ export function useConverter() {
 
       setResult(convertResult);
     } catch (e) {
-      setError(String(e));
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setIsConverting(false);
     }

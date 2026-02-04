@@ -235,6 +235,13 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
                         {result.zip_path}
                       </p>
                     </div>
+                    {result.failed_downloads > 0 && (
+                      <p className="mt-3 text-xs text-amber-700">
+                        {result.failed_downloads === result.download_total
+                          ? `All ${result.download_total} images failed to download. Check your network or CDN access.`
+                          : `${result.failed_downloads} image${result.failed_downloads === 1 ? "" : "s"} failed to download and were omitted.`}
+                      </p>
+                    )}
                     <Button
                       onClick={() => revealItemInDir(result.zip_path)}
                       variant="outline"
