@@ -125,6 +125,8 @@ bun run tauri build      # local production build
 ```
 
 > **Note:** Local builds are unsigned and intended for development only. Official signed builds are generated automatically via GitHub Releases.
+> 
+> **Note:** The backend Sentry DSN (if set) is compiled in at build time via `SENTRY_DSN_BACKEND`.
 
 ## NDJSON Input Format
 

@@ -54,7 +54,8 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
         const paths = event.payload.paths;
         if (paths.length > 0) {
           const file = paths[0];
-          if (file.endsWith(".ndjson") || file.endsWith(".jsonl")) {
+          const lowerFile = file.toLowerCase();
+          if (lowerFile.endsWith(".ndjson") || lowerFile.endsWith(".jsonl")) {
             setFileFromPath(file);
           }
         }

@@ -37,7 +37,10 @@ export function UpdateChecker() {
 
     try {
       const update = await check();
-      if (!update) return;
+      if (!update) {
+        setState("idle");
+        return;
+      }
 
       let downloaded = 0;
       let contentLength = 0;

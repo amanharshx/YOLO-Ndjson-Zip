@@ -6,6 +6,7 @@ use converter::get_converter;
 use downloader::{DownloadResult, Downloader, ProgressEvent};
 use parser::parse_ndjson;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use tauri::ipc::Channel;
@@ -73,6 +74,20 @@ async fn convert_ndjson(
         .ok();
 
     let data = parse_ndjson(&content).map_err(|e| format!("Failed to parse NDJSON: {}", e))?;
+
+    let mut seen_files = HashSet::new();
+    let mut duplicate_files = Vec::new();
+    for img in &data.images {
+        if !seen_files.insert(img.file.as_str()) && duplicate_files.len() < 5 {
+            duplicate_files.push(img.file.clone());
+        }
+    }
+    if !duplicate_files.is_empty() {
+        return Err(format!(
+            "Duplicate image filenames detected: {}. Please ensure filenames are unique.",
+            duplicate_files.join(", ")
+        ));
+    }
 
     channel
         .send(ProgressEvent {
