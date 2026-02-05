@@ -276,3 +276,90 @@ pub fn parse_ndjson(content: &str) -> Result<NDJSONData, ParseError> {
 
     Ok(NDJSONData { metadata, images })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_valid_detection_ndjson() {
+        let content = r#"{"type":"dataset","name":"test","class_names":{"0":"cat","1":"dog"}}
+{"type":"image","file":"img1.jpg","width":640,"height":480,"split":"train","url":"https://example.com/img1.jpg","annotations":{"bboxes":[[0,0.1,0.2,0.3,0.4]]}}"#;
+
+        let result = parse_ndjson(content).unwrap();
+        assert_eq!(result.metadata.name, "test");
+        assert_eq!(result.images.len(), 1);
+        assert_eq!(result.images[0].file, "img1.jpg");
+        assert_eq!(result.images[0].width, 640);
+        assert_eq!(result.images[0].height, 480);
+    }
+
+    #[test]
+    fn parse_malformed_json_returns_error() {
+        let content = r#"{"type":"dataset","name":"test"
+{invalid json}"#;
+
+        let result = parse_ndjson(content);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ParseError::JsonError(_)));
+    }
+
+    #[test]
+    fn parse_missing_metadata_returns_error() {
+        let content = r#"{"type":"image","file":"img1.jpg","width":640,"height":480}"#;
+
+        let result = parse_ndjson(content);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ParseError::NoMetadata));
+    }
+
+    #[test]
+    fn get_bboxes_extracts_correctly() {
+        let entry = ImageEntry {
+            r#type: "image".to_string(),
+            file: "test.jpg".to_string(),
+            url: String::new(),
+            width: 640,
+            height: 480,
+            split: "train".to_string(),
+            annotations: Some(serde_json::json!({
+                "bboxes": [[0, 0.1, 0.2, 0.3, 0.4], [1, 0.5, 0.6, 0.7, 0.8]]
+            })),
+        };
+
+        let bboxes = entry.get_bboxes();
+        assert_eq!(bboxes.len(), 2);
+        assert_eq!(bboxes[0].class_id, 0);
+        assert!((bboxes[0].x - 0.1).abs() < f64::EPSILON);
+        assert_eq!(bboxes[1].class_id, 1);
+        assert!((bboxes[1].x - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn train_images_filters_correctly() {
+        let content = r#"{"type":"dataset","name":"test","class_names":{}}
+{"type":"image","file":"train1.jpg","width":640,"height":480,"split":"train","url":""}
+{"type":"image","file":"valid1.jpg","width":640,"height":480,"split":"valid","url":""}
+{"type":"image","file":"train2.jpg","width":640,"height":480,"split":"train","url":""}"#;
+
+        let data = parse_ndjson(content).unwrap();
+        let train = data.train_images();
+        assert_eq!(train.len(), 2);
+        assert!(train.iter().all(|img| img.split == "train"));
+    }
+
+    #[test]
+    fn valid_images_filters_correctly() {
+        let content = r#"{"type":"dataset","name":"test","class_names":{}}
+{"type":"image","file":"train1.jpg","width":640,"height":480,"split":"train","url":""}
+{"type":"image","file":"valid1.jpg","width":640,"height":480,"split":"valid","url":""}
+{"type":"image","file":"val1.jpg","width":640,"height":480,"split":"val","url":""}"#;
+
+        let data = parse_ndjson(content).unwrap();
+        let valid = data.valid_images();
+        assert_eq!(valid.len(), 2);
+        assert!(valid
+            .iter()
+            .all(|img| img.split == "valid" || img.split == "val"));
+    }
+}

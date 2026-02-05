@@ -135,6 +135,16 @@ export function useConverter() {
     return (progress.current / elapsedSeconds).toFixed(1);
   };
 
+  // Expose setFileFromPath for E2E testing (only in dev/test)
+  useEffect(() => {
+    if (import.meta.env.DEV || import.meta.env.MODE === "test") {
+      (window as unknown as { __E2E_SET_FILE__?: (path: string) => void }).__E2E_SET_FILE__ = setFileFromPath;
+    }
+    return () => {
+      delete (window as unknown as { __E2E_SET_FILE__?: unknown }).__E2E_SET_FILE__;
+    };
+  }, []);
+
   return {
     selectedFile,
     selectedFileName,

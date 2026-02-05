@@ -128,6 +128,16 @@ bun run tauri build      # local production build
 > 
 > **Note:** The backend Sentry DSN (if set) is compiled in at build time via `SENTRY_DSN_BACKEND`.
 
+### Tests
+
+```bash
+# Rust unit tests
+cd src-tauri && cargo test
+
+# Frontend unit tests
+bun run test
+```
+
 ## NDJSON Input Format
 
 The app expects newline-delimited JSON with this structure:

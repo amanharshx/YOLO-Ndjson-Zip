@@ -232,6 +232,8 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::normalize_zip_path;
+    use crate::parser::parse_ndjson;
+    use std::collections::HashSet;
 
     #[test]
     fn normalize_zip_path_accepts_simple_paths() {
@@ -259,5 +261,40 @@ mod tests {
     #[test]
     fn normalize_zip_path_rejects_windows_prefix() {
         assert!(normalize_zip_path("C:\\evil.txt").is_err());
+    }
+
+    fn check_duplicates(content: &str) -> Vec<String> {
+        let data = parse_ndjson(content).unwrap();
+        let mut seen = HashSet::new();
+        let mut duplicates = Vec::new();
+        for img in &data.images {
+            if !seen.insert(img.file.as_str()) && duplicates.len() < 5 {
+                duplicates.push(img.file.clone());
+            }
+        }
+        duplicates
+    }
+
+    #[test]
+    fn duplicate_filenames_detected() {
+        let content = r#"{"type":"dataset","name":"test","class_names":{}}
+{"type":"image","file":"img1.jpg","width":640,"height":480,"split":"train","url":""}
+{"type":"image","file":"img1.jpg","width":640,"height":480,"split":"train","url":""}
+{"type":"image","file":"img2.jpg","width":640,"height":480,"split":"train","url":""}"#;
+
+        let duplicates = check_duplicates(content);
+        assert_eq!(duplicates.len(), 1);
+        assert_eq!(duplicates[0], "img1.jpg");
+    }
+
+    #[test]
+    fn unique_filenames_pass() {
+        let content = r#"{"type":"dataset","name":"test","class_names":{}}
+{"type":"image","file":"img1.jpg","width":640,"height":480,"split":"train","url":""}
+{"type":"image","file":"img2.jpg","width":640,"height":480,"split":"train","url":""}
+{"type":"image","file":"img3.jpg","width":640,"height":480,"split":"train","url":""}"#;
+
+        let duplicates = check_duplicates(content);
+        assert!(duplicates.is_empty());
     }
 }

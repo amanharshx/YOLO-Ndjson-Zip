@@ -35,6 +35,9 @@ src-tauri/gen/
 src-tauri/tauri.release.conf.json
 .tauri-keys/
 
+# E2E (local only)
+e2e/
+
 target/
 **/*.rs.bk
 

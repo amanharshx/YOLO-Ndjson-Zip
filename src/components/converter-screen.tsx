@@ -75,6 +75,7 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
 
         <main className="flex flex-1 items-center justify-center px-4">
           <Card
+            data-testid="upload-card"
             className={`w-full max-w-md cursor-pointer border-2 border-dashed p-10 text-center transition-colors hover:border-primary/50 ${isDragging ? "border-primary bg-primary/5" : ""}`}
             onClick={selectFile}
           >
@@ -117,7 +118,7 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
                   <FileJson className="h-6 w-6 text-primary" />
                 </div>
                 <div>
-                  <p className="font-medium">{selectedFileName}</p>
+                  <p data-testid="file-name" className="font-medium">{selectedFileName}</p>
                   <p className="text-sm text-muted-foreground">
                     Ready to convert
                   </p>
@@ -197,6 +198,7 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
                   )}
 
                   <Button
+                    data-testid="convert-button"
                     onClick={handleConvert}
                     disabled={isConverting}
                     className="w-full py-6 text-lg"
@@ -220,7 +222,7 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
                 </>
               ) : (
                 <div className="space-y-4">
-                  <Card className="bg-primary/5 p-6">
+                  <Card data-testid="success-card" className="bg-primary/5 p-6">
                     <div className="flex items-center gap-3 mb-4">
                       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/20">
                         <Check className="h-5 w-5 text-primary" />
@@ -266,8 +268,8 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
 
           {/* Error Display */}
           {error && (
-            <Card className="bg-destructive/10 p-4 text-center">
-              <p className="font-medium text-destructive">{error}</p>
+            <Card data-testid="error-card" className="bg-destructive/10 p-4 text-center">
+              <p data-testid="error-message" className="font-medium text-destructive">{error}</p>
             </Card>
           )}
         </div>

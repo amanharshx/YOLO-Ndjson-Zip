@@ -183,3 +183,41 @@ fn validate_download_url(url: &str) -> Result<(), String> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_url_accepts_https() {
+        let result = validate_download_url("https://example.com/image.jpg");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_url_accepts_http() {
+        let result = validate_download_url("http://example.com/image.jpg");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_url_rejects_localhost() {
+        let result = validate_download_url("http://127.0.0.1/image.jpg");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Private or local"));
+    }
+
+    #[test]
+    fn validate_url_rejects_private_ip_10() {
+        let result = validate_download_url("http://10.0.0.1/image.jpg");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Private or local"));
+    }
+
+    #[test]
+    fn validate_url_rejects_private_ip_192() {
+        let result = validate_download_url("http://192.168.1.1/image.jpg");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Private or local"));
+    }
+}

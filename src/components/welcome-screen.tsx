@@ -6,7 +6,7 @@ import appIcon from "../../assets/icon2.png";
 
 export function WelcomeScreen({ onGetStarted }: { onGetStarted: () => void }) {
   return (
-    <div className="relative flex min-h-screen">
+    <div data-testid="welcome-screen" className="relative flex min-h-screen">
       <div className="absolute top-4 right-4">
         <UpdateChecker />
       </div>
@@ -93,6 +93,7 @@ export function WelcomeScreen({ onGetStarted }: { onGetStarted: () => void }) {
             </div>
 
             <Button
+              data-testid="get-started"
               onClick={onGetStarted}
               size="lg"
               className="mt-4 w-full py-6 text-lg"

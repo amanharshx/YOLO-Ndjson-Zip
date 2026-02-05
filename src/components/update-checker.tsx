@@ -91,7 +91,7 @@ export function UpdateChecker() {
 
   if (state === "up-to-date") {
     return (
-      <span className="flex items-center gap-1.5 text-xs text-green-600">
+      <span data-testid="update-status" className="flex items-center gap-1.5 text-xs text-green-600">
         <CheckCircle className="h-3.5 w-3.5" />
         Up to date
       </span>

@@ -49,3 +49,57 @@ pub fn get_class_list(data: &NDJSONData) -> Vec<String> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::{DatasetMetadata, NDJSONData};
+
+    fn make_metadata_with_classes(class_names: HashMap<String, String>) -> NDJSONData {
+        NDJSONData {
+            metadata: DatasetMetadata {
+                r#type: "dataset".to_string(),
+                task: "detect".to_string(),
+                name: "test".to_string(),
+                description: String::new(),
+                bytes: 0,
+                url: String::new(),
+                class_names,
+                kpt_shape: None,
+                version: 1,
+            },
+            images: vec![],
+        }
+    }
+
+    #[test]
+    fn get_converter_returns_known_formats() {
+        assert!(get_converter("yolo").is_some());
+        assert!(get_converter("YOLO").is_some());
+        assert!(get_converter("coco").is_some());
+        assert!(get_converter("pascal_voc").is_some());
+        assert!(get_converter("voc").is_some());
+        assert!(get_converter("createml").is_some());
+        assert!(get_converter("yolo_darknet").is_some());
+    }
+
+    #[test]
+    fn get_converter_returns_none_for_unknown() {
+        assert!(get_converter("unknown_format").is_none());
+        assert!(get_converter("").is_none());
+        assert!(get_converter("xml").is_none());
+    }
+
+    #[test]
+    fn get_class_list_orders_by_id() {
+        let mut class_names = HashMap::new();
+        class_names.insert("2".to_string(), "bird".to_string());
+        class_names.insert("0".to_string(), "cat".to_string());
+        class_names.insert("1".to_string(), "dog".to_string());
+
+        let data = make_metadata_with_classes(class_names);
+        let class_list = get_class_list(&data);
+
+        assert_eq!(class_list, vec!["cat", "dog", "bird"]);
+    }
+}
