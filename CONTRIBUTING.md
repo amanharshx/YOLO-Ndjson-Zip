@@ -45,6 +45,9 @@ bun run build
 # Run Rust tests
 cd src-tauri && cargo test
 
+# Run frontend unit tests
+bun run test
+
 # Lint Rust code
 cd src-tauri && cargo clippy
 
@@ -63,6 +66,7 @@ bun run tauri build
 4. **Run checks** before committing:
    ```bash
    bun run build                   # frontend type-check + build
+   bun run test                    # frontend unit tests
    cd src-tauri && cargo clippy    # Rust lints
    cd src-tauri && cargo test      # Rust tests
    ```
