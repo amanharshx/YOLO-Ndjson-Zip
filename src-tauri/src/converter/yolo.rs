@@ -6,6 +6,28 @@ pub struct YoloConverter {
     darknet: bool,
 }
 
+fn quote_yaml_scalar(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+fn sanitize_path_segment(segment: &str) -> String {
+    let sanitized = segment
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | '\0' => '_',
+            _ => c,
+        })
+        .collect::<String>()
+        .trim()
+        .to_string();
+
+    if sanitized.is_empty() {
+        "unlabeled".to_string()
+    } else {
+        sanitized
+    }
+}
+
 impl YoloConverter {
     pub fn new() -> Self {
         Self { darknet: false }
@@ -31,7 +53,7 @@ impl YoloConverter {
         yaml.push_str("names:\n");
 
         for (i, name) in class_names.iter().enumerate() {
-            yaml.push_str(&format!("  {}: {}\n", i, name));
+            yaml.push_str(&format!("  {}: {}\n", i, quote_yaml_scalar(name)));
         }
 
         if task == "pose" {
@@ -154,10 +176,11 @@ impl Converter for YoloConverter {
                                 .get(&class_id)
                                 .cloned()
                                 .unwrap_or_else(|| format!("class_{}", class_id));
+                            let class_dir = sanitize_path_segment(&class_name);
 
                             if let Some(image_data) = downloaded_images.get(&img.file) {
                                 files.insert(
-                                    format!("{}/{}/{}", split, class_name, img.file),
+                                    format!("{}/{}/{}", split, class_dir, img.file),
                                     image_data.clone(),
                                 );
                             }
@@ -196,5 +219,71 @@ impl Converter for YoloConverter {
         }
 
         files
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::{DatasetMetadata, ImageEntry, NDJSONData};
+    use serde_json::json;
+
+    fn make_data(
+        task: &str,
+        class_names: HashMap<String, String>,
+        kpt_shape: Option<Vec<i32>>,
+        images: Vec<ImageEntry>,
+    ) -> NDJSONData {
+        NDJSONData {
+            metadata: DatasetMetadata {
+                r#type: "dataset".to_string(),
+                task: task.to_string(),
+                name: "test".to_string(),
+                description: String::new(),
+                bytes: 0,
+                url: String::new(),
+                class_names,
+                kpt_shape,
+                version: 1,
+            },
+            images,
+        }
+    }
+
+    #[test]
+    fn create_data_yaml_quotes_class_names() {
+        let mut class_names = HashMap::new();
+        class_names.insert("0".to_string(), "cat: {evil: true}\n# injected".to_string());
+        let data = make_data("detect", class_names, None, vec![]);
+        let converter = YoloConverter::new();
+
+        let yaml = converter.create_data_yaml(&data);
+
+        assert!(yaml.contains(r#"0: "cat: {evil: true}\n# injected""#));
+    }
+
+    #[test]
+    fn classify_paths_sanitize_class_name_segments() {
+        let mut class_names = HashMap::new();
+        class_names.insert("0".to_string(), "dogs/cats".to_string());
+        let image = ImageEntry {
+            r#type: "image".to_string(),
+            file: "img1.jpg".to_string(),
+            url: String::new(),
+            width: 640,
+            height: 480,
+            split: "train".to_string(),
+            annotations: Some(json!({
+                "classification": [0]
+            })),
+        };
+        let data = make_data("classify", class_names, None, vec![image]);
+        let converter = YoloConverter::new();
+        let mut downloaded_images = HashMap::new();
+        downloaded_images.insert("img1.jpg".to_string(), vec![1, 2, 3]);
+
+        let files = converter.convert(&data, &downloaded_images);
+
+        assert!(files.contains_key("train/dogs_cats/img1.jpg"));
     }
 }

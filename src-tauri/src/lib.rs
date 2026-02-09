@@ -13,6 +13,9 @@ use tauri::ipc::Channel;
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
+const MAX_NDJSON_BYTES: u64 = 100 * 1024 * 1024; // 100 MiB
+const MAX_DOWNLOAD_CONCURRENCY: usize = 20;
+
 #[derive(Debug, Serialize)]
 pub struct ConvertResult {
     pub zip_path: String,
@@ -39,7 +42,13 @@ fn normalize_zip_path(path: &str) -> Result<String, String> {
     }
     for component in Path::new(&normalized).components() {
         match component {
-            std::path::Component::Normal(_) | std::path::Component::CurDir => {}
+            std::path::Component::Normal(name) => {
+                let name = name.to_string_lossy();
+                if is_windows_reserved_segment(&name) {
+                    return Err(format!("Invalid ZIP entry path: {}", path));
+                }
+            }
+            std::path::Component::CurDir => {}
             std::path::Component::ParentDir
             | std::path::Component::RootDir
             | std::path::Component::Prefix(_) => {
@@ -51,6 +60,45 @@ fn normalize_zip_path(path: &str) -> Result<String, String> {
     Ok(normalized)
 }
 
+fn is_windows_reserved_segment(segment: &str) -> bool {
+    let trimmed = segment.trim_end_matches([' ', '.']);
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let base = trimmed.split('.').next().unwrap_or(trimmed);
+    let upper = base.to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
+}
+
+fn is_ndjson_size_allowed(size: u64) -> bool {
+    size <= MAX_NDJSON_BYTES
+}
+
 #[tauri::command]
 async fn convert_ndjson(
     file_path: String,
@@ -59,6 +107,16 @@ async fn convert_ndjson(
     include_images: bool,
     channel: Channel<ProgressEvent>,
 ) -> Result<ConvertResult, String> {
+    let metadata = std::fs::metadata(&file_path)
+        .map_err(|e| format!("Failed to inspect file '{}': {}", &file_path, e))?;
+    if !is_ndjson_size_allowed(metadata.len()) {
+        return Err(format!(
+            "NDJSON file is too large ({} bytes). Maximum allowed is {} bytes.",
+            metadata.len(),
+            MAX_NDJSON_BYTES
+        ));
+    }
+
     // Read the NDJSON file
     let content = std::fs::read_to_string(&file_path)
         .map_err(|e| format!("Failed to read file '{}': {}", &file_path, e))?;
@@ -100,8 +158,8 @@ async fn convert_ndjson(
 
     // Download images if requested
     let download_result = if include_images {
-        let downloader =
-            Downloader::new(100).map_err(|e| format!("Failed to init downloader: {}", e))?;
+        let downloader = Downloader::new(MAX_DOWNLOAD_CONCURRENCY)
+            .map_err(|e| format!("Failed to init downloader: {}", e))?;
         downloader.download_all(&data.images, &channel).await
     } else {
         DownloadResult {
@@ -231,7 +289,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_zip_path;
+    use super::{is_ndjson_size_allowed, normalize_zip_path, MAX_NDJSON_BYTES};
     use crate::parser::parse_ndjson;
     use std::collections::HashSet;
 
@@ -261,6 +319,13 @@ mod tests {
     #[test]
     fn normalize_zip_path_rejects_windows_prefix() {
         assert!(normalize_zip_path("C:\\evil.txt").is_err());
+    }
+
+    #[test]
+    fn normalize_zip_path_rejects_windows_reserved_names() {
+        assert!(normalize_zip_path("CON.txt").is_err());
+        assert!(normalize_zip_path("train/NUL.jpg").is_err());
+        assert!(normalize_zip_path("labels/lpt1").is_err());
     }
 
     fn check_duplicates(content: &str) -> Vec<String> {
@@ -296,5 +361,15 @@ mod tests {
 
         let duplicates = check_duplicates(content);
         assert!(duplicates.is_empty());
+    }
+
+    #[test]
+    fn ndjson_size_limit_allows_max_size() {
+        assert!(is_ndjson_size_allowed(MAX_NDJSON_BYTES));
+    }
+
+    #[test]
+    fn ndjson_size_limit_rejects_oversize() {
+        assert!(!is_ndjson_size_allowed(MAX_NDJSON_BYTES + 1));
     }
 }
