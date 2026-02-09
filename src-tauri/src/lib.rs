@@ -4,7 +4,7 @@ mod parser;
 
 use converter::get_converter;
 use downloader::{DownloadResult, Downloader, ProgressEvent};
-use parser::parse_ndjson;
+use parser::{parse_ndjson, ImageEntry};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::io::Write;
@@ -99,6 +99,19 @@ fn is_ndjson_size_allowed(size: u64) -> bool {
     size <= MAX_NDJSON_BYTES
 }
 
+fn deduplicate_images_by_file(images: &[ImageEntry]) -> Vec<ImageEntry> {
+    let mut seen_files = HashSet::new();
+    let mut unique_images = Vec::with_capacity(images.len());
+
+    for img in images {
+        if seen_files.insert(img.file.clone()) {
+            unique_images.push(img.clone());
+        }
+    }
+
+    unique_images
+}
+
 #[tauri::command]
 async fn convert_ndjson(
     file_path: String,
@@ -131,21 +144,8 @@ async fn convert_ndjson(
         })
         .ok();
 
-    let data = parse_ndjson(&content).map_err(|e| format!("Failed to parse NDJSON: {}", e))?;
-
-    let mut seen_files = HashSet::new();
-    let mut duplicate_files = Vec::new();
-    for img in &data.images {
-        if !seen_files.insert(img.file.as_str()) && duplicate_files.len() < 5 {
-            duplicate_files.push(img.file.clone());
-        }
-    }
-    if !duplicate_files.is_empty() {
-        return Err(format!(
-            "Duplicate image filenames detected: {}. Please ensure filenames are unique.",
-            duplicate_files.join(", ")
-        ));
-    }
+    let mut data = parse_ndjson(&content).map_err(|e| format!("Failed to parse NDJSON: {}", e))?;
+    data.images = deduplicate_images_by_file(&data.images);
 
     channel
         .send(ProgressEvent {
@@ -289,9 +289,10 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_ndjson_size_allowed, normalize_zip_path, MAX_NDJSON_BYTES};
+    use super::{
+        deduplicate_images_by_file, is_ndjson_size_allowed, normalize_zip_path, MAX_NDJSON_BYTES,
+    };
     use crate::parser::parse_ndjson;
-    use std::collections::HashSet;
 
     #[test]
     fn normalize_zip_path_accepts_simple_paths() {
@@ -328,41 +329,6 @@ mod tests {
         assert!(normalize_zip_path("labels/lpt1").is_err());
     }
 
-    fn check_duplicates(content: &str) -> Vec<String> {
-        let data = parse_ndjson(content).unwrap();
-        let mut seen = HashSet::new();
-        let mut duplicates = Vec::new();
-        for img in &data.images {
-            if !seen.insert(img.file.as_str()) && duplicates.len() < 5 {
-                duplicates.push(img.file.clone());
-            }
-        }
-        duplicates
-    }
-
-    #[test]
-    fn duplicate_filenames_detected() {
-        let content = r#"{"type":"dataset","name":"test","class_names":{}}
-{"type":"image","file":"img1.jpg","width":640,"height":480,"split":"train","url":""}
-{"type":"image","file":"img1.jpg","width":640,"height":480,"split":"train","url":""}
-{"type":"image","file":"img2.jpg","width":640,"height":480,"split":"train","url":""}"#;
-
-        let duplicates = check_duplicates(content);
-        assert_eq!(duplicates.len(), 1);
-        assert_eq!(duplicates[0], "img1.jpg");
-    }
-
-    #[test]
-    fn unique_filenames_pass() {
-        let content = r#"{"type":"dataset","name":"test","class_names":{}}
-{"type":"image","file":"img1.jpg","width":640,"height":480,"split":"train","url":""}
-{"type":"image","file":"img2.jpg","width":640,"height":480,"split":"train","url":""}
-{"type":"image","file":"img3.jpg","width":640,"height":480,"split":"train","url":""}"#;
-
-        let duplicates = check_duplicates(content);
-        assert!(duplicates.is_empty());
-    }
-
     #[test]
     fn ndjson_size_limit_allows_max_size() {
         assert!(is_ndjson_size_allowed(MAX_NDJSON_BYTES));
@@ -371,5 +337,22 @@ mod tests {
     #[test]
     fn ndjson_size_limit_rejects_oversize() {
         assert!(!is_ndjson_size_allowed(MAX_NDJSON_BYTES + 1));
+    }
+
+    #[test]
+    fn deduplicate_images_by_file_keeps_first_occurrence() {
+        let content = r#"{"type":"dataset","name":"test","class_names":{}}
+{"type":"image","file":"img1.jpg","width":640,"height":480,"split":"train","url":"https://a.example/img1.jpg"}
+{"type":"image","file":"img1.jpg","width":320,"height":240,"split":"valid","url":"https://b.example/img1.jpg"}
+{"type":"image","file":"img2.jpg","width":640,"height":480,"split":"test","url":"https://c.example/img2.jpg"}"#;
+
+        let data = parse_ndjson(content).unwrap();
+        let deduped = deduplicate_images_by_file(&data.images);
+
+        assert_eq!(deduped.len(), 2);
+        assert_eq!(deduped[0].file, "img1.jpg");
+        assert_eq!(deduped[0].split, "train");
+        assert_eq!(deduped[0].width, 640);
+        assert_eq!(deduped[1].file, "img2.jpg");
     }
 }
