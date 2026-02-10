@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { RefreshCw, Download, CheckCircle, AlertCircle } from "lucide-react";
@@ -10,6 +10,28 @@ export function UpdateChecker() {
   const [version, setVersion] = useState<string>("");
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string>("");
+  const resetTimeoutRef = useRef<number | null>(null);
+
+  const clearResetTimeout = () => {
+    if (resetTimeoutRef.current !== null) {
+      window.clearTimeout(resetTimeoutRef.current);
+      resetTimeoutRef.current = null;
+    }
+  };
+
+  const scheduleResetToIdle = (delayMs: number) => {
+    clearResetTimeout();
+    resetTimeoutRef.current = window.setTimeout(() => {
+      setState("idle");
+      resetTimeoutRef.current = null;
+    }, delayMs);
+  };
+
+  useEffect(() => {
+    return () => {
+      clearResetTimeout();
+    };
+  }, []);
 
   const checkForUpdates = async () => {
     setState("checking");
@@ -23,12 +45,12 @@ export function UpdateChecker() {
         setState("available");
       } else {
         setState("up-to-date");
-        setTimeout(() => setState("idle"), 3000);
+        scheduleResetToIdle(3000);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to check for updates");
       setState("error");
-      setTimeout(() => setState("idle"), 5000);
+      scheduleResetToIdle(5000);
     }
   };
 
