@@ -68,7 +68,7 @@ impl CreateMlConverter {
                     .collect();
 
                 CreateMlImage {
-                    image: img.file.clone(),
+                    image: img.effective_file_name().to_string(),
                     image_url: img.url.clone(),
                     annotations,
                 }
@@ -93,7 +93,7 @@ impl CreateMlConverter {
                     .cloned()
                     .unwrap_or_else(|| format!("class_{}", class_id));
                 Some(CreateMlClassification {
-                    image: img.file.clone(),
+                    image: img.effective_file_name().to_string(),
                     label: class_name,
                 })
             })
@@ -133,10 +133,11 @@ impl Converter for CreateMlConverter {
 
             // Add images
             for img in images {
+                let image_file = img.effective_file_name();
                 if let Some(image_data) =
-                    downloaded_images.get(&image_download_key(split, &img.file))
+                    downloaded_images.get(&image_download_key(split, image_file))
                 {
-                    files.insert(format!("{}/{}", split, img.file), image_data.clone());
+                    files.insert(format!("{}/{}", split, image_file), image_data.clone());
                 }
             }
         }
@@ -169,6 +170,7 @@ mod tests {
                 ImageEntry {
                     r#type: "image".to_string(),
                     file: "img1.jpg".to_string(),
+                    output_file: None,
                     url: String::new(),
                     width: 640,
                     height: 480,
@@ -180,6 +182,7 @@ mod tests {
                 ImageEntry {
                     r#type: "image".to_string(),
                     file: "img1.jpg".to_string(),
+                    output_file: None,
                     url: String::new(),
                     width: 640,
                     height: 480,
@@ -200,5 +203,51 @@ mod tests {
 
         assert_eq!(files.get("train/img1.jpg"), Some(&vec![1]));
         assert_eq!(files.get("valid/img1.jpg"), Some(&vec![2]));
+    }
+
+    #[test]
+    fn convert_uses_effective_file_name_in_images_and_json() {
+        let data = NDJSONData {
+            metadata: DatasetMetadata {
+                r#type: "dataset".to_string(),
+                task: "detect".to_string(),
+                name: "test".to_string(),
+                description: String::new(),
+                bytes: 0,
+                url: String::new(),
+                class_names: HashMap::from([("0".to_string(), "animal".to_string())]),
+                kpt_shape: None,
+                version: 1,
+            },
+            images: vec![ImageEntry {
+                r#type: "image".to_string(),
+                file: "img1.jpg".to_string(),
+                output_file: Some("img1__abcd1234.jpg".to_string()),
+                url: String::new(),
+                width: 640,
+                height: 480,
+                split: "train".to_string(),
+                annotations: Some(json!({
+                    "boxes": [[0, 0.5, 0.5, 0.2, 0.2]]
+                })),
+            }],
+        };
+
+        let converter = CreateMlConverter::new();
+        let mut downloaded_images = HashMap::new();
+        downloaded_images.insert(image_download_key("train", "img1__abcd1234.jpg"), vec![1]);
+
+        let files = converter.convert(&data, &downloaded_images);
+
+        assert_eq!(files.get("train/img1__abcd1234.jpg"), Some(&vec![1]));
+        let data: serde_json::Value =
+            serde_json::from_slice(files.get("train.json").unwrap()).unwrap();
+        assert_eq!(
+            data.as_array()
+                .and_then(|arr| arr.first())
+                .and_then(|item| item.get("image"))
+                .and_then(|v| v.as_str()),
+            Some("img1__abcd1234.jpg")
+        );
     }
 }

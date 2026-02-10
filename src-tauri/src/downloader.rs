@@ -49,7 +49,7 @@ impl Downloader {
             .filter(|img| !img.url.is_empty())
             .map(|img| {
                 let split = normalize_split(&img.split);
-                let item_label = format!("{}/{}", split, img.file);
+                let item_label = format!("{}/{}", split, img.effective_file_name());
                 let download_key = image_entry_download_key(img);
                 (item_label, download_key, img.url.clone())
             })

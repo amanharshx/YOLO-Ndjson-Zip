@@ -30,14 +30,16 @@ impl PascalVocConverter {
             .write_event(Event::Start(BytesStart::new("annotation")))
             .ok();
 
+        let image_file = img.effective_file_name();
+
         // folder (empty)
         Self::write_element(&mut writer, "folder", "");
 
         // filename
-        Self::write_element(&mut writer, "filename", &img.file);
+        Self::write_element(&mut writer, "filename", image_file);
 
         // path (just the filename)
-        Self::write_element(&mut writer, "path", &img.file);
+        Self::write_element(&mut writer, "path", image_file);
 
         // source
         writer
@@ -190,6 +192,7 @@ impl Converter for PascalVocConverter {
             if task == "classify" {
                 // Classification: folder structure {split}/{class_name}/{file}
                 for img in images.iter() {
+                    let image_file = img.effective_file_name();
                     let classifications = img.get_classifications();
                     if let Some(&class_id) = classifications.first() {
                         let class_name = class_names
@@ -198,10 +201,10 @@ impl Converter for PascalVocConverter {
                             .unwrap_or_else(|| format!("class_{}", class_id));
 
                         if let Some(image_data) =
-                            downloaded_images.get(&image_download_key(split, &img.file))
+                            downloaded_images.get(&image_download_key(split, image_file))
                         {
                             files.insert(
-                                format!("{}/{}/{}", split, class_name, img.file),
+                                format!("{}/{}/{}", split, class_name, image_file),
                                 image_data.clone(),
                             );
                         }
@@ -210,21 +213,21 @@ impl Converter for PascalVocConverter {
             } else {
                 // Detection or Segmentation: create XML annotations
                 for img in images.iter() {
+                    let image_file = img.effective_file_name();
                     let xml_content = self.create_voc_xml(img, &class_names, task);
-                    let xml_filename = img
-                        .file
+                    let xml_filename = image_file
                         .rsplit_once('.')
                         .map(|(name, _)| name)
-                        .unwrap_or(&img.file);
+                        .unwrap_or(image_file);
                     files.insert(
                         format!("{}/{}.xml", split, xml_filename),
                         xml_content.into_bytes(),
                     );
 
                     if let Some(image_data) =
-                        downloaded_images.get(&image_download_key(split, &img.file))
+                        downloaded_images.get(&image_download_key(split, image_file))
                     {
-                        files.insert(format!("{}/{}", split, img.file), image_data.clone());
+                        files.insert(format!("{}/{}", split, image_file), image_data.clone());
                     }
                 }
             }
@@ -258,6 +261,7 @@ mod tests {
                 ImageEntry {
                     r#type: "image".to_string(),
                     file: "img1.jpg".to_string(),
+                    output_file: None,
                     url: String::new(),
                     width: 640,
                     height: 480,
@@ -269,6 +273,7 @@ mod tests {
                 ImageEntry {
                     r#type: "image".to_string(),
                     file: "img1.jpg".to_string(),
+                    output_file: None,
                     url: String::new(),
                     width: 640,
                     height: 480,
@@ -289,5 +294,63 @@ mod tests {
 
         assert_eq!(files.get("train/img1.jpg"), Some(&vec![1]));
         assert_eq!(files.get("valid/img1.jpg"), Some(&vec![2]));
+    }
+
+    #[test]
+    fn convert_uses_effective_file_names_for_duplicate_outputs() {
+        let data = NDJSONData {
+            metadata: DatasetMetadata {
+                r#type: "dataset".to_string(),
+                task: "detect".to_string(),
+                name: "test".to_string(),
+                description: String::new(),
+                bytes: 0,
+                url: String::new(),
+                class_names: HashMap::from([("0".to_string(), "heic".to_string())]),
+                kpt_shape: None,
+                version: 1,
+            },
+            images: vec![
+                ImageEntry {
+                    r#type: "image".to_string(),
+                    file: "Frame_98.jpg".to_string(),
+                    output_file: None,
+                    url: "https://cdn.example/a.jpg".to_string(),
+                    width: 640,
+                    height: 480,
+                    split: "train".to_string(),
+                    annotations: Some(json!({
+                        "boxes": [[0, 0.5, 0.5, 0.2, 0.2]]
+                    })),
+                },
+                ImageEntry {
+                    r#type: "image".to_string(),
+                    file: "Frame_98.jpg".to_string(),
+                    output_file: Some("Frame_98__abcd1234.jpg".to_string()),
+                    url: "https://cdn.example/b.jpg".to_string(),
+                    width: 640,
+                    height: 480,
+                    split: "train".to_string(),
+                    annotations: Some(json!({
+                        "boxes": [[0, 0.4, 0.4, 0.3, 0.3]]
+                    })),
+                },
+            ],
+        };
+
+        let converter = PascalVocConverter::new();
+        let mut downloaded_images = HashMap::new();
+        downloaded_images.insert(image_download_key("train", "Frame_98.jpg"), vec![1]);
+        downloaded_images.insert(
+            image_download_key("train", "Frame_98__abcd1234.jpg"),
+            vec![2],
+        );
+
+        let files = converter.convert(&data, &downloaded_images);
+
+        assert_eq!(files.get("train/Frame_98.jpg"), Some(&vec![1]));
+        assert_eq!(files.get("train/Frame_98__abcd1234.jpg"), Some(&vec![2]));
+        assert!(files.contains_key("train/Frame_98.xml"));
+        assert!(files.contains_key("train/Frame_98__abcd1234.xml"));
     }
 }
