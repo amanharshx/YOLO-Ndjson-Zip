@@ -4,7 +4,7 @@ mod parser;
 
 use converter::get_converter;
 use downloader::{DownloadResult, Downloader, ProgressEvent};
-use parser::{parse_ndjson, ImageEntry};
+use parser::{normalize_split, parse_ndjson, ImageEntry};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::io::Write;
@@ -99,13 +99,14 @@ fn is_ndjson_size_allowed(size: u64) -> bool {
     size <= MAX_NDJSON_BYTES
 }
 
-fn deduplicate_images_by_file(images: &[ImageEntry]) -> Vec<ImageEntry> {
-    let mut seen_files = HashSet::new();
+fn deduplicate_images_by_split_and_file(images: &[ImageEntry]) -> Vec<ImageEntry> {
+    let mut seen_entries = HashSet::new();
     let mut unique_images = Vec::with_capacity(images.len());
 
-    for img in images {
-        if seen_files.insert(img.file.clone()) {
-            unique_images.push(img.clone());
+    for image in images {
+        let split_key = normalize_split(&image.split).to_string();
+        if seen_entries.insert((split_key, image.file.clone())) {
+            unique_images.push(image.clone());
         }
     }
 
@@ -145,7 +146,7 @@ async fn convert_ndjson(
         .ok();
 
     let mut data = parse_ndjson(&content).map_err(|e| format!("Failed to parse NDJSON: {}", e))?;
-    data.images = deduplicate_images_by_file(&data.images);
+    data.images = deduplicate_images_by_split_and_file(&data.images);
 
     channel
         .send(ProgressEvent {
@@ -290,7 +291,8 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        deduplicate_images_by_file, is_ndjson_size_allowed, normalize_zip_path, MAX_NDJSON_BYTES,
+        deduplicate_images_by_split_and_file, is_ndjson_size_allowed, normalize_zip_path,
+        MAX_NDJSON_BYTES,
     };
     use crate::parser::parse_ndjson;
 
@@ -340,19 +342,23 @@ mod tests {
     }
 
     #[test]
-    fn deduplicate_images_by_file_keeps_first_occurrence() {
+    fn deduplicate_images_is_split_aware_and_keeps_first_within_split() {
         let content = r#"{"type":"dataset","name":"test","class_names":{}}
 {"type":"image","file":"img1.jpg","width":640,"height":480,"split":"train","url":"https://a.example/img1.jpg"}
-{"type":"image","file":"img1.jpg","width":320,"height":240,"split":"valid","url":"https://b.example/img1.jpg"}
+{"type":"image","file":"img1.jpg","width":320,"height":240,"split":"val","url":"https://b.example/img1.jpg"}
+{"type":"image","file":"img1.jpg","width":800,"height":600,"split":"train","url":"https://c.example/img1.jpg"}
 {"type":"image","file":"img2.jpg","width":640,"height":480,"split":"test","url":"https://c.example/img2.jpg"}"#;
 
         let data = parse_ndjson(content).unwrap();
-        let deduped = deduplicate_images_by_file(&data.images);
+        let deduped = deduplicate_images_by_split_and_file(&data.images);
 
-        assert_eq!(deduped.len(), 2);
+        assert_eq!(deduped.len(), 3);
         assert_eq!(deduped[0].file, "img1.jpg");
         assert_eq!(deduped[0].split, "train");
         assert_eq!(deduped[0].width, 640);
-        assert_eq!(deduped[1].file, "img2.jpg");
+        assert_eq!(deduped[1].file, "img1.jpg");
+        assert_eq!(deduped[1].split, "val");
+        assert_eq!(deduped[1].width, 320);
+        assert_eq!(deduped[2].file, "img2.jpg");
     }
 }

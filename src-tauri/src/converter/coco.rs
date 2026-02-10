@@ -1,5 +1,5 @@
 use super::{get_class_list, Converter};
-use crate::parser::{ImageEntry, NDJSONData};
+use crate::parser::{image_download_key, ImageEntry, NDJSONData};
 use chrono::Utc;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -257,7 +257,9 @@ impl Converter for CocoConverter {
 
             // Add images to {split}/ directory
             for img in images {
-                if let Some(image_data) = downloaded_images.get(&img.file) {
+                if let Some(image_data) =
+                    downloaded_images.get(&image_download_key(split, &img.file))
+                {
                     files.insert(format!("{}/{}", split, img.file), image_data.clone());
                 }
             }
@@ -271,5 +273,63 @@ impl Converter for CocoConverter {
         }
 
         files
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::{image_download_key, DatasetMetadata};
+    use serde_json::json;
+
+    #[test]
+    fn convert_uses_split_aware_download_keys() {
+        let data = NDJSONData {
+            metadata: DatasetMetadata {
+                r#type: "dataset".to_string(),
+                task: "detect".to_string(),
+                name: "test".to_string(),
+                description: String::new(),
+                bytes: 0,
+                url: String::new(),
+                class_names: HashMap::from([("0".to_string(), "animal".to_string())]),
+                kpt_shape: None,
+                version: 1,
+            },
+            images: vec![
+                ImageEntry {
+                    r#type: "image".to_string(),
+                    file: "img1.jpg".to_string(),
+                    url: String::new(),
+                    width: 640,
+                    height: 480,
+                    split: "train".to_string(),
+                    annotations: Some(json!({
+                        "bboxes": [[0, 0.5, 0.5, 0.2, 0.2]]
+                    })),
+                },
+                ImageEntry {
+                    r#type: "image".to_string(),
+                    file: "img1.jpg".to_string(),
+                    url: String::new(),
+                    width: 640,
+                    height: 480,
+                    split: "val".to_string(),
+                    annotations: Some(json!({
+                        "bboxes": [[0, 0.4, 0.4, 0.3, 0.3]]
+                    })),
+                },
+            ],
+        };
+
+        let converter = CocoConverter::new();
+        let mut downloaded_images = HashMap::new();
+        downloaded_images.insert(image_download_key("train", "img1.jpg"), vec![1]);
+        downloaded_images.insert(image_download_key("valid", "img1.jpg"), vec![2]);
+
+        let files = converter.convert(&data, &downloaded_images);
+
+        assert_eq!(files.get("train/img1.jpg"), Some(&vec![1]));
+        assert_eq!(files.get("valid/img1.jpg"), Some(&vec![2]));
     }
 }

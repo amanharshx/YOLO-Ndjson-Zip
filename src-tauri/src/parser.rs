@@ -82,6 +82,22 @@ fn default_split() -> String {
     "train".to_string()
 }
 
+pub fn normalize_split(split: &str) -> &str {
+    match split {
+        "val" | "valid" => "valid",
+        _ => split,
+    }
+}
+
+pub fn image_download_key(split: &str, file: &str) -> String {
+    let split = normalize_split(split);
+    format!("{}:{}:{}", split.len(), split, file)
+}
+
+pub fn image_entry_download_key(image: &ImageEntry) -> String {
+    image_download_key(&image.split, &image.file)
+}
+
 impl ImageEntry {
     pub fn get_bboxes(&self) -> Vec<BoundingBox> {
         let Some(annotations) = &self.annotations else {
