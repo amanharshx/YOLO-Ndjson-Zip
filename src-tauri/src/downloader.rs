@@ -1,4 +1,4 @@
-use crate::parser::ImageEntry;
+use crate::parser::{image_entry_download_key, normalize_split, ImageEntry};
 use futures::stream::{self, StreamExt};
 use reqwest::Client;
 use serde::Serialize;
@@ -47,7 +47,12 @@ impl Downloader {
         let images_with_urls: Vec<_> = images
             .iter()
             .filter(|img| !img.url.is_empty())
-            .map(|img| (img.file.clone(), img.url.clone()))
+            .map(|img| {
+                let split = normalize_split(&img.split);
+                let item_label = format!("{}/{}", split, img.effective_file_name());
+                let download_key = image_entry_download_key(img);
+                (item_label, download_key, img.url.clone())
+            })
             .collect();
 
         let total = images_with_urls.len() as u32;
@@ -73,7 +78,7 @@ impl Downloader {
         let client = self.client.clone();
 
         stream::iter(images_with_urls)
-            .map(|(file, url)| {
+            .map(|(item_label, download_key, url)| {
                 let client = client.clone();
                 let downloaded = Arc::clone(&downloaded);
                 let counter = Arc::clone(&counter);
@@ -82,14 +87,14 @@ impl Downloader {
 
                 async move {
                     if let Err(err) = validate_download_url(&url).await {
-                        eprintln!("Skipping download for '{}': {}", file, err);
+                        eprintln!("Skipping download for '{}': {}", item_label, err);
                         failed.fetch_add(1, Ordering::SeqCst);
                         let current = counter.fetch_add(1, Ordering::SeqCst) + 1;
                         let _ = channel.send(ProgressEvent {
                             phase: "downloading".to_string(),
                             current,
                             total,
-                            item: Some(file),
+                            item: Some(item_label.clone()),
                         });
                         return;
                     }
@@ -100,10 +105,13 @@ impl Downloader {
                                 match read_response_with_limit(response, MAX_DOWNLOAD_BYTES).await {
                                     Ok(bytes) => {
                                         let mut map = downloaded.lock().await;
-                                        map.insert(file.clone(), bytes);
+                                        map.insert(download_key.clone(), bytes);
                                     }
                                     Err(err) => {
-                                        eprintln!("Skipping download for '{}': {}", file, err);
+                                        eprintln!(
+                                            "Skipping download for '{}': {}",
+                                            item_label, err
+                                        );
                                         failed.fetch_add(1, Ordering::SeqCst);
                                     }
                                 }
@@ -112,7 +120,7 @@ impl Downloader {
                             }
                         }
                         Err(e) => {
-                            eprintln!("Failed to download '{}': {}", file, e);
+                            eprintln!("Failed to download '{}': {}", item_label, e);
                             failed.fetch_add(1, Ordering::SeqCst);
                         }
                     }
@@ -122,7 +130,7 @@ impl Downloader {
                         phase: "downloading".to_string(),
                         current,
                         total,
-                        item: Some(file),
+                        item: Some(item_label),
                     });
                 }
             })

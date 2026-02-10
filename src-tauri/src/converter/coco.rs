@@ -1,5 +1,5 @@
 use super::{get_class_list, Converter};
-use crate::parser::{ImageEntry, NDJSONData};
+use crate::parser::{image_download_key, ImageEntry, NDJSONData};
 use chrono::Utc;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -125,7 +125,7 @@ impl CocoConverter {
 
             coco.images.push(CocoImage {
                 id: img_id,
-                file_name: img.file.clone(),
+                file_name: img.effective_file_name().to_string(),
                 width: img.width,
                 height: img.height,
                 license: 1,
@@ -257,8 +257,11 @@ impl Converter for CocoConverter {
 
             // Add images to {split}/ directory
             for img in images {
-                if let Some(image_data) = downloaded_images.get(&img.file) {
-                    files.insert(format!("{}/{}", split, img.file), image_data.clone());
+                let image_file = img.effective_file_name();
+                if let Some(image_data) =
+                    downloaded_images.get(&image_download_key(split, image_file))
+                {
+                    files.insert(format!("{}/{}", split, image_file), image_data.clone());
                 }
             }
 
@@ -271,5 +274,112 @@ impl Converter for CocoConverter {
         }
 
         files
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::{image_download_key, DatasetMetadata};
+    use serde_json::json;
+
+    #[test]
+    fn convert_uses_split_aware_download_keys() {
+        let data = NDJSONData {
+            metadata: DatasetMetadata {
+                r#type: "dataset".to_string(),
+                task: "detect".to_string(),
+                name: "test".to_string(),
+                description: String::new(),
+                bytes: 0,
+                url: String::new(),
+                class_names: HashMap::from([("0".to_string(), "animal".to_string())]),
+                kpt_shape: None,
+                version: 1,
+            },
+            images: vec![
+                ImageEntry {
+                    r#type: "image".to_string(),
+                    file: "img1.jpg".to_string(),
+                    output_file: None,
+                    url: String::new(),
+                    width: 640,
+                    height: 480,
+                    split: "train".to_string(),
+                    annotations: Some(json!({
+                        "bboxes": [[0, 0.5, 0.5, 0.2, 0.2]]
+                    })),
+                },
+                ImageEntry {
+                    r#type: "image".to_string(),
+                    file: "img1.jpg".to_string(),
+                    output_file: None,
+                    url: String::new(),
+                    width: 640,
+                    height: 480,
+                    split: "val".to_string(),
+                    annotations: Some(json!({
+                        "bboxes": [[0, 0.4, 0.4, 0.3, 0.3]]
+                    })),
+                },
+            ],
+        };
+
+        let converter = CocoConverter::new();
+        let mut downloaded_images = HashMap::new();
+        downloaded_images.insert(image_download_key("train", "img1.jpg"), vec![1]);
+        downloaded_images.insert(image_download_key("valid", "img1.jpg"), vec![2]);
+
+        let files = converter.convert(&data, &downloaded_images);
+
+        assert_eq!(files.get("train/img1.jpg"), Some(&vec![1]));
+        assert_eq!(files.get("valid/img1.jpg"), Some(&vec![2]));
+    }
+
+    #[test]
+    fn convert_uses_effective_file_name_in_images_and_coco_json() {
+        let data = NDJSONData {
+            metadata: DatasetMetadata {
+                r#type: "dataset".to_string(),
+                task: "detect".to_string(),
+                name: "test".to_string(),
+                description: String::new(),
+                bytes: 0,
+                url: String::new(),
+                class_names: HashMap::from([("0".to_string(), "animal".to_string())]),
+                kpt_shape: None,
+                version: 1,
+            },
+            images: vec![ImageEntry {
+                r#type: "image".to_string(),
+                file: "img1.jpg".to_string(),
+                output_file: Some("img1__abcd1234.jpg".to_string()),
+                url: String::new(),
+                width: 640,
+                height: 480,
+                split: "train".to_string(),
+                annotations: Some(json!({
+                    "boxes": [[0, 0.5, 0.5, 0.2, 0.2]]
+                })),
+            }],
+        };
+
+        let converter = CocoConverter::new();
+        let mut downloaded_images = HashMap::new();
+        downloaded_images.insert(image_download_key("train", "img1__abcd1234.jpg"), vec![1]);
+
+        let files = converter.convert(&data, &downloaded_images);
+
+        assert_eq!(files.get("train/img1__abcd1234.jpg"), Some(&vec![1]));
+        let coco: serde_json::Value =
+            serde_json::from_slice(files.get("train/_annotations.coco.json").unwrap()).unwrap();
+        assert_eq!(
+            coco.get("images")
+                .and_then(|v| v.as_array())
+                .and_then(|v| v.first())
+                .and_then(|img| img.get("file_name"))
+                .and_then(|v| v.as_str()),
+            Some("img1__abcd1234.jpg")
+        );
     }
 }

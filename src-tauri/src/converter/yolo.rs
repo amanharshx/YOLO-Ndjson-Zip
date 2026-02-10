@@ -1,5 +1,5 @@
 use super::{get_class_list, get_class_names, Converter};
-use crate::parser::{ImageEntry, NDJSONData};
+use crate::parser::{image_download_key, ImageEntry, NDJSONData};
 use std::collections::HashMap;
 
 pub struct YoloConverter {
@@ -163,6 +163,7 @@ impl Converter for YoloConverter {
 
         for (split, images) in splits {
             for img in images {
+                let image_file = img.effective_file_name();
                 // Create label file
                 let label_content = match task.as_str() {
                     "pose" => self.create_pose_label(img, kpt_shape),
@@ -178,9 +179,11 @@ impl Converter for YoloConverter {
                                 .unwrap_or_else(|| format!("class_{}", class_id));
                             let class_dir = sanitize_path_segment(&class_name);
 
-                            if let Some(image_data) = downloaded_images.get(&img.file) {
+                            if let Some(image_data) =
+                                downloaded_images.get(&image_download_key(split, image_file))
+                            {
                                 files.insert(
-                                    format!("{}/{}/{}", split, class_dir, img.file),
+                                    format!("{}/{}/{}", split, class_dir, image_file),
                                     image_data.clone(),
                                 );
                             }
@@ -191,10 +194,10 @@ impl Converter for YoloConverter {
                 };
 
                 let label_filename = img
-                    .file
+                    .effective_file_name()
                     .rsplit_once('.')
                     .map(|(name, _)| name)
-                    .unwrap_or(&img.file);
+                    .unwrap_or(image_file);
 
                 if self.darknet {
                     // Darknet: flat structure, images + labels side by side in {split}/
@@ -202,8 +205,10 @@ impl Converter for YoloConverter {
                         format!("{}/{}.txt", split, label_filename),
                         label_content.into_bytes(),
                     );
-                    if let Some(image_data) = downloaded_images.get(&img.file) {
-                        files.insert(format!("{}/{}", split, img.file), image_data.clone());
+                    if let Some(image_data) =
+                        downloaded_images.get(&image_download_key(split, image_file))
+                    {
+                        files.insert(format!("{}/{}", split, image_file), image_data.clone());
                     }
                 } else {
                     // Standard YOLO: {split}/labels/ and {split}/images/
@@ -211,8 +216,13 @@ impl Converter for YoloConverter {
                         format!("{}/labels/{}.txt", split, label_filename),
                         label_content.into_bytes(),
                     );
-                    if let Some(image_data) = downloaded_images.get(&img.file) {
-                        files.insert(format!("{}/images/{}", split, img.file), image_data.clone());
+                    if let Some(image_data) =
+                        downloaded_images.get(&image_download_key(split, image_file))
+                    {
+                        files.insert(
+                            format!("{}/images/{}", split, image_file),
+                            image_data.clone(),
+                        );
                     }
                 }
             }
@@ -225,7 +235,7 @@ impl Converter for YoloConverter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::{DatasetMetadata, ImageEntry, NDJSONData};
+    use crate::parser::{image_download_key, DatasetMetadata, ImageEntry, NDJSONData};
     use serde_json::json;
 
     fn make_data(
@@ -269,6 +279,7 @@ mod tests {
         let image = ImageEntry {
             r#type: "image".to_string(),
             file: "img1.jpg".to_string(),
+            output_file: None,
             url: String::new(),
             width: 640,
             height: 480,
@@ -280,10 +291,109 @@ mod tests {
         let data = make_data("classify", class_names, None, vec![image]);
         let converter = YoloConverter::new();
         let mut downloaded_images = HashMap::new();
-        downloaded_images.insert("img1.jpg".to_string(), vec![1, 2, 3]);
+        downloaded_images.insert(image_download_key("train", "img1.jpg"), vec![1, 2, 3]);
 
         let files = converter.convert(&data, &downloaded_images);
 
         assert!(files.contains_key("train/dogs_cats/img1.jpg"));
+    }
+
+    #[test]
+    fn convert_uses_split_aware_download_keys() {
+        let mut class_names = HashMap::new();
+        class_names.insert("0".to_string(), "animal".to_string());
+
+        let train_image = ImageEntry {
+            r#type: "image".to_string(),
+            file: "img1.jpg".to_string(),
+            output_file: None,
+            url: String::new(),
+            width: 640,
+            height: 480,
+            split: "train".to_string(),
+            annotations: Some(json!({
+                "bboxes": [[0, 0.5, 0.5, 0.2, 0.2]]
+            })),
+        };
+        let valid_image = ImageEntry {
+            r#type: "image".to_string(),
+            file: "img1.jpg".to_string(),
+            output_file: None,
+            url: String::new(),
+            width: 640,
+            height: 480,
+            split: "val".to_string(),
+            annotations: Some(json!({
+                "bboxes": [[0, 0.4, 0.4, 0.3, 0.3]]
+            })),
+        };
+
+        let data = make_data("detect", class_names, None, vec![train_image, valid_image]);
+        let converter = YoloConverter::new();
+        let mut downloaded_images = HashMap::new();
+        downloaded_images.insert(image_download_key("train", "img1.jpg"), vec![1]);
+        downloaded_images.insert(image_download_key("valid", "img1.jpg"), vec![2]);
+
+        let files = converter.convert(&data, &downloaded_images);
+
+        assert_eq!(files.get("train/images/img1.jpg"), Some(&vec![1]));
+        assert_eq!(files.get("valid/images/img1.jpg"), Some(&vec![2]));
+    }
+
+    #[test]
+    fn convert_uses_effective_file_names_for_duplicate_outputs() {
+        let mut class_names = HashMap::new();
+        class_names.insert("0".to_string(), "heic".to_string());
+        class_names.insert("1".to_string(), "png".to_string());
+
+        let data = make_data(
+            "detect",
+            class_names,
+            None,
+            vec![
+                ImageEntry {
+                    r#type: "image".to_string(),
+                    file: "Frame_98.jpg".to_string(),
+                    output_file: None,
+                    url: "https://cdn.example/a.jpg".to_string(),
+                    width: 640,
+                    height: 480,
+                    split: "train".to_string(),
+                    annotations: Some(json!({
+                        "boxes": [[0, 0.5, 0.5, 0.2, 0.2]]
+                    })),
+                },
+                ImageEntry {
+                    r#type: "image".to_string(),
+                    file: "Frame_98.jpg".to_string(),
+                    output_file: Some("Frame_98__abcd1234.jpg".to_string()),
+                    url: "https://cdn.example/b.jpg".to_string(),
+                    width: 640,
+                    height: 480,
+                    split: "train".to_string(),
+                    annotations: Some(json!({
+                        "boxes": [[1, 0.4, 0.4, 0.3, 0.3]]
+                    })),
+                },
+            ],
+        );
+
+        let converter = YoloConverter::new();
+        let mut downloaded_images = HashMap::new();
+        downloaded_images.insert(image_download_key("train", "Frame_98.jpg"), vec![1]);
+        downloaded_images.insert(
+            image_download_key("train", "Frame_98__abcd1234.jpg"),
+            vec![2],
+        );
+
+        let files = converter.convert(&data, &downloaded_images);
+
+        assert_eq!(files.get("train/images/Frame_98.jpg"), Some(&vec![1]));
+        assert_eq!(
+            files.get("train/images/Frame_98__abcd1234.jpg"),
+            Some(&vec![2])
+        );
+        assert!(files.contains_key("train/labels/Frame_98.txt"));
+        assert!(files.contains_key("train/labels/Frame_98__abcd1234.txt"));
     }
 }

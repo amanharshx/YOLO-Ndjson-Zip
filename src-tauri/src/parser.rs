@@ -68,6 +68,8 @@ pub struct ImageEntry {
     #[serde(default)]
     pub r#type: String,
     pub file: String,
+    #[serde(skip)]
+    pub output_file: Option<String>,
     #[serde(default)]
     pub url: String,
     pub width: i32,
@@ -82,13 +84,36 @@ fn default_split() -> String {
     "train".to_string()
 }
 
+pub fn normalize_split(split: &str) -> &str {
+    match split {
+        "val" | "valid" => "valid",
+        _ => split,
+    }
+}
+
+pub fn image_download_key(split: &str, file: &str) -> String {
+    let split = normalize_split(split);
+    format!("{}:{}:{}", split.len(), split, file)
+}
+
+pub fn image_entry_download_key(image: &ImageEntry) -> String {
+    image_download_key(&image.split, image.effective_file_name())
+}
+
 impl ImageEntry {
+    pub fn effective_file_name(&self) -> &str {
+        self.output_file.as_deref().unwrap_or(&self.file)
+    }
+
     pub fn get_bboxes(&self) -> Vec<BoundingBox> {
         let Some(annotations) = &self.annotations else {
             return Vec::new();
         };
 
-        let Some(bboxes) = annotations.get("bboxes") else {
+        let Some(bboxes) = annotations
+            .get("bboxes")
+            .or_else(|| annotations.get("boxes"))
+        else {
             return Vec::new();
         };
 
@@ -318,6 +343,7 @@ mod tests {
         let entry = ImageEntry {
             r#type: "image".to_string(),
             file: "test.jpg".to_string(),
+            output_file: None,
             url: String::new(),
             width: 640,
             height: 480,
@@ -333,6 +359,45 @@ mod tests {
         assert!((bboxes[0].x - 0.1).abs() < f64::EPSILON);
         assert_eq!(bboxes[1].class_id, 1);
         assert!((bboxes[1].x - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn get_bboxes_extracts_from_boxes_alias() {
+        let entry = ImageEntry {
+            r#type: "image".to_string(),
+            file: "test.jpg".to_string(),
+            output_file: None,
+            url: String::new(),
+            width: 640,
+            height: 480,
+            split: "train".to_string(),
+            annotations: Some(serde_json::json!({
+                "boxes": [[2, 0.25, 0.35, 0.45, 0.55]]
+            })),
+        };
+
+        let bboxes = entry.get_bboxes();
+        assert_eq!(bboxes.len(), 1);
+        assert_eq!(bboxes[0].class_id, 2);
+        assert!((bboxes[0].x - 0.25).abs() < f64::EPSILON);
+        assert!((bboxes[0].y - 0.35).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn image_entry_download_key_uses_effective_file_name() {
+        let entry = ImageEntry {
+            r#type: "image".to_string(),
+            file: "img1.jpg".to_string(),
+            output_file: Some("img1__abcd1234.jpg".to_string()),
+            url: String::new(),
+            width: 640,
+            height: 480,
+            split: "val".to_string(),
+            annotations: None,
+        };
+
+        let key = image_entry_download_key(&entry);
+        assert_eq!(key, image_download_key("valid", "img1__abcd1234.jpg"));
     }
 
     #[test]

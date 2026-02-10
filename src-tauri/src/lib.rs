@@ -4,9 +4,9 @@ mod parser;
 
 use converter::get_converter;
 use downloader::{DownloadResult, Downloader, ProgressEvent};
-use parser::{parse_ndjson, ImageEntry};
+use parser::{normalize_split, parse_ndjson, ImageEntry};
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use tauri::ipc::Channel;
@@ -99,17 +99,80 @@ fn is_ndjson_size_allowed(size: u64) -> bool {
     size <= MAX_NDJSON_BYTES
 }
 
-fn deduplicate_images_by_file(images: &[ImageEntry]) -> Vec<ImageEntry> {
-    let mut seen_files = HashSet::new();
-    let mut unique_images = Vec::with_capacity(images.len());
+fn short_stable_hash(input: &str) -> String {
+    // FNV-1a 64-bit hash, truncated for compact deterministic filenames.
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in input.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{:08x}", (hash & 0xffff_ffff) as u32)
+}
 
-    for img in images {
-        if seen_files.insert(img.file.clone()) {
-            unique_images.push(img.clone());
+fn file_name_with_suffix(file_name: &str, suffix: &str) -> String {
+    match file_name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => {
+            format!("{}__{}.{}", stem, suffix, ext)
         }
+        _ => format!("{}__{}", file_name, suffix),
+    }
+}
+
+fn next_unique_file_name(
+    original_file: &str,
+    hash_source: &str,
+    used_names: &mut HashSet<String>,
+) -> String {
+    let hash = short_stable_hash(hash_source);
+    let mut suffix = hash.clone();
+    let mut counter = 2usize;
+
+    loop {
+        let candidate = file_name_with_suffix(original_file, &suffix);
+        if used_names.insert(candidate.clone()) {
+            return candidate;
+        }
+        suffix = format!("{}__{}", hash, counter);
+        counter += 1;
+    }
+}
+
+fn prepare_images_with_unique_output_names(images: &[ImageEntry]) -> Vec<ImageEntry> {
+    let mut seen_entries: HashMap<(String, String), usize> = HashMap::new();
+    let mut used_names_by_split: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut prepared_images = Vec::with_capacity(images.len());
+
+    for image in images {
+        let split_key = normalize_split(&image.split).to_string();
+        let used_names = used_names_by_split.entry(split_key.clone()).or_default();
+        let dedupe_key = (split_key, image.file.clone());
+        let occurrence = seen_entries.entry(dedupe_key).or_insert(0);
+
+        let mut prepared = image.clone();
+        if *occurrence == 0 {
+            if !used_names.insert(image.file.clone()) {
+                let hash_source = if image.url.is_empty() {
+                    image.file.as_str()
+                } else {
+                    image.url.as_str()
+                };
+                prepared.output_file =
+                    Some(next_unique_file_name(&image.file, hash_source, used_names));
+            }
+        } else {
+            let hash_source = if image.url.is_empty() {
+                image.file.as_str()
+            } else {
+                image.url.as_str()
+            };
+            prepared.output_file =
+                Some(next_unique_file_name(&image.file, hash_source, used_names));
+        }
+        *occurrence += 1;
+        prepared_images.push(prepared);
     }
 
-    unique_images
+    prepared_images
 }
 
 #[tauri::command]
@@ -145,7 +208,7 @@ async fn convert_ndjson(
         .ok();
 
     let mut data = parse_ndjson(&content).map_err(|e| format!("Failed to parse NDJSON: {}", e))?;
-    data.images = deduplicate_images_by_file(&data.images);
+    data.images = prepare_images_with_unique_output_names(&data.images);
 
     channel
         .send(ProgressEvent {
@@ -290,7 +353,8 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        deduplicate_images_by_file, is_ndjson_size_allowed, normalize_zip_path, MAX_NDJSON_BYTES,
+        file_name_with_suffix, is_ndjson_size_allowed, normalize_zip_path,
+        prepare_images_with_unique_output_names, short_stable_hash, MAX_NDJSON_BYTES,
     };
     use crate::parser::parse_ndjson;
 
@@ -340,19 +404,48 @@ mod tests {
     }
 
     #[test]
-    fn deduplicate_images_by_file_keeps_first_occurrence() {
+    fn prepare_images_keeps_first_and_renames_same_split_duplicates() {
         let content = r#"{"type":"dataset","name":"test","class_names":{}}
 {"type":"image","file":"img1.jpg","width":640,"height":480,"split":"train","url":"https://a.example/img1.jpg"}
-{"type":"image","file":"img1.jpg","width":320,"height":240,"split":"valid","url":"https://b.example/img1.jpg"}
+{"type":"image","file":"img1.jpg","width":320,"height":240,"split":"val","url":"https://b.example/img1.jpg"}
+{"type":"image","file":"img1.jpg","width":800,"height":600,"split":"train","url":"https://c.example/img1.jpg"}
 {"type":"image","file":"img2.jpg","width":640,"height":480,"split":"test","url":"https://c.example/img2.jpg"}"#;
 
         let data = parse_ndjson(content).unwrap();
-        let deduped = deduplicate_images_by_file(&data.images);
+        let prepared = prepare_images_with_unique_output_names(&data.images);
 
-        assert_eq!(deduped.len(), 2);
-        assert_eq!(deduped[0].file, "img1.jpg");
-        assert_eq!(deduped[0].split, "train");
-        assert_eq!(deduped[0].width, 640);
-        assert_eq!(deduped[1].file, "img2.jpg");
+        assert_eq!(prepared.len(), 4);
+        assert_eq!(prepared[0].file, "img1.jpg");
+        assert_eq!(prepared[0].effective_file_name(), "img1.jpg");
+        assert_eq!(prepared[1].split, "val");
+        assert_eq!(prepared[1].effective_file_name(), "img1.jpg");
+        assert_eq!(
+            prepared[2].effective_file_name(),
+            file_name_with_suffix("img1.jpg", &short_stable_hash("https://c.example/img1.jpg"))
+        );
+        assert_eq!(prepared[3].effective_file_name(), "img2.jpg");
+    }
+
+    #[test]
+    fn prepare_images_uses_counter_when_hash_suffix_collides() {
+        let content = r#"{"type":"dataset","name":"test","class_names":{}}
+{"type":"image","file":"img1.jpg","width":640,"height":480,"split":"train","url":"https://a.example/img1.jpg"}
+{"type":"image","file":"img1.jpg","width":640,"height":480,"split":"train","url":"https://b.example/img1.jpg","annotations":{"boxes":[[0,0.1,0.2,0.3,0.4]]}}
+{"type":"image","file":"img1.jpg","width":640,"height":480,"split":"train","url":"https://b.example/img1.jpg","annotations":{"boxes":[[1,0.2,0.3,0.3,0.4]]}}"#;
+
+        let data = parse_ndjson(content).unwrap();
+        let prepared = prepare_images_with_unique_output_names(&data.images);
+
+        assert_eq!(prepared.len(), 3);
+        let hash = short_stable_hash("https://b.example/img1.jpg");
+        assert_eq!(prepared[0].effective_file_name(), "img1.jpg");
+        assert_eq!(
+            prepared[1].effective_file_name(),
+            file_name_with_suffix("img1.jpg", &hash)
+        );
+        assert_eq!(
+            prepared[2].effective_file_name(),
+            file_name_with_suffix("img1.jpg", &format!("{}__2", hash))
+        );
     }
 }
