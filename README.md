@@ -20,9 +20,6 @@
 
 [**YOLO NDJSON Converter**](https://yolondjson.zip) is a desktop app that converts [Ultralytics](https://www.ultralytics.com/) YOLO's NDJSON annotation exports into ready-to-use datasets for YOLO, COCO, Pascal VOC, and other ML formats. Select your file, pick a format, and get a ZIP with images, labels, and config files.
 
-> [!IMPORTANT]
-> **This project is currently under active development.** Some features may be incomplete or subject to change. Bug reports and feature requests are appreciated! 
-
 ## Features
 
 - **12 Output Formats** - YOLO26 through Darknet, COCO JSON, Pascal VOC, TFRecord, CreateML
