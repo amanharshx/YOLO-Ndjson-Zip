@@ -13,7 +13,7 @@
 
 <br>
 
-<img src="assets/demo.gif" width="720" alt="YOLO NDJSON Converter demo">
+<img src="assets/readme-demo.gif" width="720" alt="YOLO NDJSON Converter demo">
 
 </div>
 <br>
