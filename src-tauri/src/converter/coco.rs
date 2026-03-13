@@ -217,6 +217,42 @@ impl CocoConverter {
                         annotation_id += 1;
                     }
                 }
+                "obb" => {
+                    for obb in img.get_obb_annotations() {
+                        let mut abs_points: Vec<f64> = Vec::new();
+                        let mut min_x = f64::MAX;
+                        let mut min_y = f64::MAX;
+                        let mut max_x = f64::MIN;
+                        let mut max_y = f64::MIN;
+
+                        for (x, y) in &obb.points {
+                            let abs_x = x * img.width as f64;
+                            let abs_y = y * img.height as f64;
+                            abs_points.push(abs_x);
+                            abs_points.push(abs_y);
+                            min_x = min_x.min(abs_x);
+                            min_y = min_y.min(abs_y);
+                            max_x = max_x.max(abs_x);
+                            max_y = max_y.max(abs_y);
+                        }
+
+                        let w = max_x - min_x;
+                        let h = max_y - min_y;
+
+                        coco.annotations.push(CocoAnnotation {
+                            id: annotation_id,
+                            image_id: img_id,
+                            category_id: obb.class_id,
+                            bbox: [min_x, min_y, w, h],
+                            area: w * h,
+                            iscrowd: 0,
+                            segmentation: vec![abs_points],
+                            keypoints: None,
+                            num_keypoints: None,
+                        });
+                        annotation_id += 1;
+                    }
+                }
                 _ => {
                     // Detection (default)
                     for bbox in img.get_bboxes() {

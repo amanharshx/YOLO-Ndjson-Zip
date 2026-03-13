@@ -138,6 +138,21 @@ impl YoloConverter {
             .collect::<Vec<_>>()
             .join("\n")
     }
+
+    fn create_obb_label(&self, img: &ImageEntry) -> String {
+        img.get_obb_annotations()
+            .iter()
+            .map(|obb| {
+                let mut parts = vec![obb.class_id.to_string()];
+                for (x, y) in &obb.points {
+                    parts.push(format!("{:.6}", x));
+                    parts.push(format!("{:.6}", y));
+                }
+                parts.join(" ")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 impl Converter for YoloConverter {
@@ -203,6 +218,7 @@ impl Converter for YoloConverter {
                 let label_content = match task.as_str() {
                     "pose" => self.create_pose_label(img, num_kpts),
                     "segment" => self.create_segment_label(img),
+                    "obb" => self.create_obb_label(img),
                     "classify" => {
                         // For classification, we use folder structure
                         let classifications = img.get_classifications();
@@ -526,5 +542,44 @@ mod tests {
         let yaml = std::str::from_utf8(files.get("data.yaml").unwrap()).unwrap();
         // Should use 3 (actual max) not 2 (stale metadata)
         assert!(yaml.contains("kpt_shape: [3, 3]"));
+    }
+
+    #[test]
+    fn obb_labels_have_correct_format() {
+        let mut class_names = HashMap::new();
+        class_names.insert("0".to_string(), "teeth".to_string());
+
+        let data = make_data(
+            "obb",
+            class_names,
+            None,
+            vec![ImageEntry {
+                r#type: "image".to_string(),
+                file: "dental.jpg".to_string(),
+                output_file: None,
+                url: String::new(),
+                width: 640,
+                height: 640,
+                split: "train".to_string(),
+                annotations: Some(json!({
+                    "obb": [[0, 0.3, 0.6, 0.2, 0.7, 0.25, 0.7, 0.29, 0.63]]
+                })),
+            }],
+        );
+
+        let converter = YoloConverter::new();
+        let files = converter.convert(&data, &HashMap::new());
+
+        let label = std::str::from_utf8(files.get("train/labels/dental.txt").unwrap()).unwrap();
+        let parts: Vec<&str> = label.split_whitespace().collect();
+        // OBB: class_id x1 y1 x2 y2 x3 y3 x4 y4
+        assert_eq!(parts.len(), 9);
+        assert_eq!(parts[0], "0");
+        assert_eq!(parts[1], "0.300000");
+        assert_eq!(parts[2], "0.600000");
+
+        // data.yaml should NOT have kpt_shape
+        let yaml = std::str::from_utf8(files.get("data.yaml").unwrap()).unwrap();
+        assert!(!yaml.contains("kpt_shape"));
     }
 }
