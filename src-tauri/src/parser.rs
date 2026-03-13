@@ -332,6 +332,28 @@ mod tests {
     }
 
     #[test]
+    fn parse_string_version() {
+        let content =
+            r#"{"type":"dataset","name":"test","class_names":{},"version":"latest"}"#;
+        let result = parse_ndjson(content).unwrap();
+        assert_eq!(result.metadata.version, "latest");
+    }
+
+    #[test]
+    fn parse_integer_version() {
+        let content = r#"{"type":"dataset","name":"test","class_names":{},"version":1}"#;
+        let result = parse_ndjson(content).unwrap();
+        assert_eq!(result.metadata.version, "1");
+    }
+
+    #[test]
+    fn parse_missing_version_defaults_to_empty() {
+        let content = r#"{"type":"dataset","name":"test","class_names":{}}"#;
+        let result = parse_ndjson(content).unwrap();
+        assert_eq!(result.metadata.version, "");
+    }
+
+    #[test]
     fn parse_malformed_json_returns_error() {
         let content = r#"{"type":"dataset","name":"test"
 {invalid json}"#;
