@@ -66,7 +66,7 @@ mod tests {
                 url: String::new(),
                 class_names,
                 kpt_shape: None,
-                version: 1,
+                version: "1".to_string(),
             },
             images: vec![],
         }

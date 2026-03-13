@@ -55,12 +55,24 @@ pub struct DatasetMetadata {
     pub class_names: HashMap<String, String>,
     #[serde(default)]
     pub kpt_shape: Option<Vec<i32>>,
-    #[serde(default)]
-    pub version: i32,
+    #[serde(default, deserialize_with = "deserialize_version")]
+    pub version: String,
 }
 
 fn default_task() -> String {
     "detect".to_string()
+}
+
+fn deserialize_version<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        _ => Ok(String::new()),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

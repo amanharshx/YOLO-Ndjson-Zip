@@ -89,7 +89,7 @@ impl CocoConverter {
                     data.metadata.name.clone()
                 },
                 url: data.metadata.url.clone(),
-                version: data.metadata.version.to_string(),
+                version: data.metadata.version.clone(),
                 year: now.format("%Y").to_string().parse().unwrap_or(2024),
                 contributor: "YOLO NDJSON Converter".to_string(),
                 date_created: now.to_rfc3339(),
@@ -295,7 +295,7 @@ mod tests {
                 url: String::new(),
                 class_names: HashMap::from([("0".to_string(), "animal".to_string())]),
                 kpt_shape: None,
-                version: 1,
+                version: "1".to_string(),
             },
             images: vec![
                 ImageEntry {
@@ -348,7 +348,7 @@ mod tests {
                 url: String::new(),
                 class_names: HashMap::from([("0".to_string(), "animal".to_string())]),
                 kpt_shape: None,
-                version: 1,
+                version: "1".to_string(),
             },
             images: vec![ImageEntry {
                 r#type: "image".to_string(),

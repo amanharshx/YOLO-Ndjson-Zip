@@ -255,7 +255,7 @@ mod tests {
                 url: String::new(),
                 class_names: HashMap::from([("0".to_string(), "animal".to_string())]),
                 kpt_shape: None,
-                version: 1,
+                version: "1".to_string(),
             },
             images: vec![
                 ImageEntry {
@@ -308,7 +308,7 @@ mod tests {
                 url: String::new(),
                 class_names: HashMap::from([("0".to_string(), "heic".to_string())]),
                 kpt_shape: None,
-                version: 1,
+                version: "1".to_string(),
             },
             images: vec![
                 ImageEntry {
