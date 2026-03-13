@@ -73,13 +73,17 @@ impl CocoConverter {
         Self
     }
 
-    fn create_coco_json(&self, images: &[&ImageEntry], data: &NDJSONData, _split: &str) -> String {
+    fn create_coco_json(
+        &self,
+        images: &[&ImageEntry],
+        data: &NDJSONData,
+        _split: &str,
+        num_kpts: usize,
+    ) -> String {
         let class_names = get_class_list(data);
         let now = Utc::now();
         let task = &data.metadata.task;
-        let kpt_shape = data.metadata.kpt_shape.as_deref();
         let is_pose = task == "pose";
-        let num_kpts = kpt_shape.and_then(|s| s.first()).copied().unwrap_or(17) as usize;
 
         let mut coco = CocoFormat {
             info: CocoInfo {
@@ -173,7 +177,7 @@ impl CocoConverter {
                     }
                 }
                 "pose" => {
-                    for pose in img.get_pose_annotations(kpt_shape) {
+                    for pose in img.get_pose_annotations() {
                         let x_min = (pose.bbox_x - pose.bbox_w / 2.0) * img.width as f64;
                         let y_min = (pose.bbox_y - pose.bbox_h / 2.0) * img.height as f64;
                         let w = pose.bbox_w * img.width as f64;
@@ -181,16 +185,22 @@ impl CocoConverter {
 
                         let mut kps: Vec<f64> = Vec::new();
                         let mut visible_count = 0;
-                        for (kp_x, kp_y) in &pose.keypoints {
+                        for (kp_x, kp_y, kp_v) in &pose.keypoints {
                             let abs_x = kp_x * img.width as f64;
                             let abs_y = kp_y * img.height as f64;
-                            let v = if *kp_x > 0.0 || *kp_y > 0.0 { 2.0 } else { 0.0 };
-                            if v > 0.0 {
+                            if *kp_v > 0.0 {
                                 visible_count += 1;
                             }
                             kps.push(abs_x);
                             kps.push(abs_y);
-                            kps.push(v);
+                            kps.push(*kp_v);
+                        }
+
+                        // Pad missing keypoints with 0,0,0 (not labeled)
+                        for _ in pose.keypoints.len()..num_kpts {
+                            kps.push(0.0);
+                            kps.push(0.0);
+                            kps.push(0.0);
                         }
 
                         coco.annotations.push(CocoAnnotation {
@@ -243,6 +253,27 @@ impl Converter for CocoConverter {
         downloaded_images: &HashMap<String, Vec<u8>>,
     ) -> HashMap<String, Vec<u8>> {
         let mut files: HashMap<String, Vec<u8>> = HashMap::new();
+        let task = &data.metadata.task;
+
+        // For pose: compute max keypoint count globally (max of metadata and actual data)
+        let num_kpts = if task == "pose" {
+            let meta_kpts = data
+                .metadata
+                .kpt_shape
+                .as_ref()
+                .and_then(|s| s.first().copied())
+                .unwrap_or(0) as usize;
+            let data_kpts = data
+                .images
+                .iter()
+                .flat_map(|img| img.get_pose_annotations())
+                .map(|p| p.keypoints.len())
+                .max()
+                .unwrap_or(0);
+            meta_kpts.max(data_kpts)
+        } else {
+            0
+        };
 
         let splits = [
             ("train", data.train_images()),
@@ -266,7 +297,7 @@ impl Converter for CocoConverter {
             }
 
             // Create JSON at {split}/_annotations.coco.json
-            let coco_json = self.create_coco_json(images, data, split);
+            let coco_json = self.create_coco_json(images, data, split, num_kpts);
             files.insert(
                 format!("{}/_annotations.coco.json", split),
                 coco_json.into_bytes(),

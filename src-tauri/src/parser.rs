@@ -28,7 +28,7 @@ pub struct PoseAnnotation {
     pub bbox_y: f64,
     pub bbox_w: f64,
     pub bbox_h: f64,
-    pub keypoints: Vec<(f64, f64)>,
+    pub keypoints: Vec<(f64, f64, f64)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -171,7 +171,7 @@ impl ImageEntry {
             .unwrap_or_default()
     }
 
-    pub fn get_pose_annotations(&self, kpt_shape: Option<&[i32]>) -> Vec<PoseAnnotation> {
+    pub fn get_pose_annotations(&self) -> Vec<PoseAnnotation> {
         let Some(annotations) = &self.annotations else {
             return Vec::new();
         };
@@ -184,33 +184,43 @@ impl ImageEntry {
             return Vec::new();
         };
 
-        let num_keypoints = kpt_shape.and_then(|s| s.first()).copied().unwrap_or(17) as usize;
-
+        // Format: [class_id, bbox_cx, bbox_cy, bbox_w, bbox_h, kp1_x, kp1_y, kp1_v, ...]
+        // Minimum: 1 (class) + 4 (bbox) + 3 (at least one keypoint) = 8
         pose_array
             .iter()
             .filter_map(|pose_data| {
                 let arr = pose_data.as_array()?;
-                let expected_len = 1 + num_keypoints * 2 + 4;
-                if arr.len() < expected_len {
+                if arr.len() < 8 {
+                    return None;
+                }
+
+                let remaining = arr.len() - 5; // subtract class_id + bbox(4)
+                if remaining % 3 != 0 {
                     return None;
                 }
 
                 let class_id = arr[0].as_i64()? as i32;
+                let bbox_x = arr[1].as_f64()?;
+                let bbox_y = arr[2].as_f64()?;
+                let bbox_w = arr[3].as_f64()?;
+                let bbox_h = arr[4].as_f64()?;
 
+                let num_keypoints = remaining / 3;
                 let mut keypoints = Vec::with_capacity(num_keypoints);
                 for i in 0..num_keypoints {
-                    let kp_x = arr[1 + i * 2].as_f64()?;
-                    let kp_y = arr[1 + i * 2 + 1].as_f64()?;
-                    keypoints.push((kp_x, kp_y));
+                    let base = 5 + i * 3;
+                    let kp_x = arr[base].as_f64()?;
+                    let kp_y = arr[base + 1].as_f64()?;
+                    let kp_v = arr[base + 2].as_f64()?;
+                    keypoints.push((kp_x, kp_y, kp_v));
                 }
 
-                let bbox_start = 1 + num_keypoints * 2;
                 Some(PoseAnnotation {
                     class_id,
-                    bbox_x: arr[bbox_start].as_f64()?,
-                    bbox_y: arr[bbox_start + 1].as_f64()?,
-                    bbox_w: arr[bbox_start + 2].as_f64()?,
-                    bbox_h: arr[bbox_start + 3].as_f64()?,
+                    bbox_x,
+                    bbox_y,
+                    bbox_w,
+                    bbox_h,
                     keypoints,
                 })
             })
@@ -414,6 +424,57 @@ mod tests {
         assert_eq!(bboxes[0].class_id, 2);
         assert!((bboxes[0].x - 0.25).abs() < f64::EPSILON);
         assert!((bboxes[0].y - 0.35).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn get_pose_annotations_parses_new_format() {
+        // Format: [class_id, bbox_cx, bbox_cy, bbox_w, bbox_h, kp1_x, kp1_y, kp1_v, ...]
+        let entry = ImageEntry {
+            r#type: "image".to_string(),
+            file: "test.jpg".to_string(),
+            output_file: None,
+            url: String::new(),
+            width: 1200,
+            height: 800,
+            split: "train".to_string(),
+            annotations: Some(serde_json::json!({
+                "pose": [[0, 0.5, 0.6, 0.3, 0.4, 0.1, 0.2, 2, 0.3, 0.4, 1, 0.5, 0.6, 0]]
+            })),
+        };
+
+        let poses = entry.get_pose_annotations();
+        assert_eq!(poses.len(), 1);
+        assert_eq!(poses[0].class_id, 0);
+        assert!((poses[0].bbox_x - 0.5).abs() < f64::EPSILON);
+        assert!((poses[0].bbox_y - 0.6).abs() < f64::EPSILON);
+        assert!((poses[0].bbox_w - 0.3).abs() < f64::EPSILON);
+        assert!((poses[0].bbox_h - 0.4).abs() < f64::EPSILON);
+        assert_eq!(poses[0].keypoints.len(), 3);
+        assert!((poses[0].keypoints[0].0 - 0.1).abs() < f64::EPSILON);
+        assert!((poses[0].keypoints[0].1 - 0.2).abs() < f64::EPSILON);
+        assert!((poses[0].keypoints[0].2 - 2.0).abs() < f64::EPSILON);
+        assert!((poses[0].keypoints[1].2 - 1.0).abs() < f64::EPSILON);
+        assert!((poses[0].keypoints[2].2 - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn get_pose_annotations_rejects_invalid_length() {
+        let entry = ImageEntry {
+            r#type: "image".to_string(),
+            file: "test.jpg".to_string(),
+            output_file: None,
+            url: String::new(),
+            width: 640,
+            height: 480,
+            split: "train".to_string(),
+            annotations: Some(serde_json::json!({
+                "pose": [[0, 0.5, 0.6, 0.3, 0.4, 0.1, 0.2]]
+            })),
+        };
+
+        // 7 elements: class(1) + bbox(4) + 2 remaining (not divisible by 3)
+        let poses = entry.get_pose_annotations();
+        assert!(poses.is_empty());
     }
 
     #[test]
