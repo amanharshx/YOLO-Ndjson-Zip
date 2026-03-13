@@ -333,8 +333,7 @@ mod tests {
 
     #[test]
     fn parse_string_version() {
-        let content =
-            r#"{"type":"dataset","name":"test","class_names":{},"version":"latest"}"#;
+        let content = r#"{"type":"dataset","name":"test","class_names":{},"version":"latest"}"#;
         let result = parse_ndjson(content).unwrap();
         assert_eq!(result.metadata.version, "latest");
     }
