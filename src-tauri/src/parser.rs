@@ -55,12 +55,24 @@ pub struct DatasetMetadata {
     pub class_names: HashMap<String, String>,
     #[serde(default)]
     pub kpt_shape: Option<Vec<i32>>,
-    #[serde(default)]
-    pub version: i32,
+    #[serde(default, deserialize_with = "deserialize_version")]
+    pub version: String,
 }
 
 fn default_task() -> String {
     "detect".to_string()
+}
+
+fn deserialize_version<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        _ => Ok(String::new()),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -317,6 +329,27 @@ mod tests {
         assert_eq!(result.images[0].file, "img1.jpg");
         assert_eq!(result.images[0].width, 640);
         assert_eq!(result.images[0].height, 480);
+    }
+
+    #[test]
+    fn parse_string_version() {
+        let content = r#"{"type":"dataset","name":"test","class_names":{},"version":"latest"}"#;
+        let result = parse_ndjson(content).unwrap();
+        assert_eq!(result.metadata.version, "latest");
+    }
+
+    #[test]
+    fn parse_integer_version() {
+        let content = r#"{"type":"dataset","name":"test","class_names":{},"version":1}"#;
+        let result = parse_ndjson(content).unwrap();
+        assert_eq!(result.metadata.version, "1");
+    }
+
+    #[test]
+    fn parse_missing_version_defaults_to_empty() {
+        let content = r#"{"type":"dataset","name":"test","class_names":{}}"#;
+        let result = parse_ndjson(content).unwrap();
+        assert_eq!(result.metadata.version, "");
     }
 
     #[test]
