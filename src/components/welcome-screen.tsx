@@ -39,7 +39,7 @@ export function WelcomeScreen({ onGetStarted }: { onGetStarted: () => void }) {
                 <Layers className="h-4 w-4 text-primary" />
               </div>
               <span className="text-sm text-muted-foreground">
-                <span className="font-semibold text-foreground">12</span> formats across <span className="font-semibold text-foreground">4</span> task types
+                <span className="font-semibold text-foreground">12</span> formats across <span className="font-semibold text-foreground">5</span> task types
               </span>
             </div>
             <div className="flex items-center gap-3">
@@ -79,7 +79,7 @@ export function WelcomeScreen({ onGetStarted }: { onGetStarted: () => void }) {
                 TASK TYPES
               </h3>
               <div className="flex flex-wrap gap-2">
-                {["Detection", "Segmentation", "Pose", "Classification"].map(
+                {["Detection", "Segmentation", "Pose", "Classification", "OBB"].map(
                   (task) => (
                     <span
                       key={task}
