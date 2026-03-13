@@ -38,6 +38,12 @@ pub struct SegmentAnnotation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObbAnnotation {
+    pub class_id: i32,
+    pub points: [(f64, f64); 4],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatasetMetadata {
     #[serde(default)]
     pub r#type: String,
@@ -260,6 +266,41 @@ impl ImageEntry {
                 }
 
                 Some(SegmentAnnotation { class_id, points })
+            })
+            .collect()
+    }
+
+    pub fn get_obb_annotations(&self) -> Vec<ObbAnnotation> {
+        let Some(annotations) = &self.annotations else {
+            return Vec::new();
+        };
+
+        let Some(obbs) = annotations.get("obb") else {
+            return Vec::new();
+        };
+
+        let Some(obb_array) = obbs.as_array() else {
+            return Vec::new();
+        };
+
+        // Format: [class_id, x1, y1, x2, y2, x3, y3, x4, y4]
+        obb_array
+            .iter()
+            .filter_map(|obb_data| {
+                let arr = obb_data.as_array()?;
+                if arr.len() != 9 {
+                    return None;
+                }
+
+                let class_id = arr[0].as_i64()? as i32;
+                let points = [
+                    (arr[1].as_f64()?, arr[2].as_f64()?),
+                    (arr[3].as_f64()?, arr[4].as_f64()?),
+                    (arr[5].as_f64()?, arr[6].as_f64()?),
+                    (arr[7].as_f64()?, arr[8].as_f64()?),
+                ];
+
+                Some(ObbAnnotation { class_id, points })
             })
             .collect()
     }
@@ -520,5 +561,48 @@ mod tests {
         assert!(valid
             .iter()
             .all(|img| img.split == "valid" || img.split == "val"));
+    }
+
+    #[test]
+    fn get_obb_annotations_parses_correctly() {
+        let entry = ImageEntry {
+            r#type: "image".to_string(),
+            file: "test.jpg".to_string(),
+            output_file: None,
+            url: String::new(),
+            width: 640,
+            height: 640,
+            split: "train".to_string(),
+            annotations: Some(serde_json::json!({
+                "obb": [[0, 0.3, 0.6, 0.2, 0.7, 0.25, 0.7, 0.29, 0.63]]
+            })),
+        };
+
+        let obbs = entry.get_obb_annotations();
+        assert_eq!(obbs.len(), 1);
+        assert_eq!(obbs[0].class_id, 0);
+        assert!((obbs[0].points[0].0 - 0.3).abs() < f64::EPSILON);
+        assert!((obbs[0].points[0].1 - 0.6).abs() < f64::EPSILON);
+        assert!((obbs[0].points[3].0 - 0.29).abs() < f64::EPSILON);
+        assert!((obbs[0].points[3].1 - 0.63).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn get_obb_annotations_rejects_wrong_length() {
+        let entry = ImageEntry {
+            r#type: "image".to_string(),
+            file: "test.jpg".to_string(),
+            output_file: None,
+            url: String::new(),
+            width: 640,
+            height: 640,
+            split: "train".to_string(),
+            annotations: Some(serde_json::json!({
+                "obb": [[0, 0.3, 0.6, 0.2, 0.7, 0.25]]
+            })),
+        };
+
+        let obbs = entry.get_obb_annotations();
+        assert!(obbs.is_empty());
     }
 }

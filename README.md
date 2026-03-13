@@ -23,7 +23,7 @@
 ## Features
 
 - **12 Output Formats** - YOLO26 through Darknet, COCO JSON, Pascal VOC, TFRecord, CreateML
-- **4 Task Types** - Detection, Segmentation, Pose Estimation, Classification
+- **5 Task Types** - Detection, Segmentation, Pose Estimation, Classification, OBB
 - **Parallel Downloads** - 100 concurrent connections for fast image fetching
 - **Privacy-First** - Everything runs locally; your data never leaves your device
 - **Cross-Platform** - macOS, Windows, and Linux
@@ -33,11 +33,11 @@
 
 | Format | Status | Compatible Tasks |
 |--------|:------:|------------------|
-| YOLO26 | ✅ | Detection, Segmentation, Pose, Classification |
-| YOLOv12 | ✅ | Detection, Segmentation, Pose, Classification |
-| YOLO11 | ✅ | Detection, Segmentation, Pose, Classification |
+| YOLO26 | ✅ | Detection, Segmentation, Pose, Classification, OBB |
+| YOLOv12 | ✅ | Detection, Segmentation, Pose, Classification, OBB |
+| YOLO11 | ✅ | Detection, Segmentation, Pose, Classification, OBB |
 | YOLOv9 | ✅ | Detection, Segmentation |
-| YOLOv8 | ✅ | Detection, Segmentation, Pose, Classification |
+| YOLOv8 | ✅ | Detection, Segmentation, Pose, Classification, OBB |
 | YOLOv7 | ✅ | Detection |
 | YOLOv5 | ✅ | Detection, Segmentation, Classification |
 | YOLO Darknet | ✅ | Detection, Classification |

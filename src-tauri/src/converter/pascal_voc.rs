@@ -64,7 +64,54 @@ impl PascalVocConverter {
             if task == "segment" { "1" } else { "0" },
         );
 
-        if task == "segment" {
+        if task == "obb" {
+            // OBB: derive axis-aligned bounding boxes from oriented corners
+            for obb in img.get_obb_annotations() {
+                writer
+                    .write_event(Event::Start(BytesStart::new("object")))
+                    .ok();
+
+                let class_name = class_names
+                    .get(&obb.class_id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("class_{}", obb.class_id));
+
+                Self::write_element(&mut writer, "name", &class_name);
+                Self::write_element(&mut writer, "pose", "Unspecified");
+                Self::write_element(&mut writer, "truncated", "0");
+                Self::write_element(&mut writer, "difficult", "0");
+
+                let mut min_x = f64::MAX;
+                let mut min_y = f64::MAX;
+                let mut max_x = f64::MIN;
+                let mut max_y = f64::MIN;
+
+                for (x, y) in &obb.points {
+                    let abs_x = x * img.width as f64;
+                    let abs_y = y * img.height as f64;
+                    min_x = min_x.min(abs_x);
+                    min_y = min_y.min(abs_y);
+                    max_x = max_x.max(abs_x);
+                    max_y = max_y.max(abs_y);
+                }
+
+                let xmin = min_x.round() as i32;
+                let ymin = min_y.round() as i32;
+                let xmax = max_x.round() as i32;
+                let ymax = max_y.round() as i32;
+
+                writer
+                    .write_event(Event::Start(BytesStart::new("bndbox")))
+                    .ok();
+                Self::write_element(&mut writer, "xmin", &xmin.max(0).to_string());
+                Self::write_element(&mut writer, "ymin", &ymin.max(0).to_string());
+                Self::write_element(&mut writer, "xmax", &xmax.min(img.width).to_string());
+                Self::write_element(&mut writer, "ymax", &ymax.min(img.height).to_string());
+                writer.write_event(Event::End(BytesEnd::new("bndbox"))).ok();
+
+                writer.write_event(Event::End(BytesEnd::new("object"))).ok();
+            }
+        } else if task == "segment" {
             // Segmentation: derive bounding boxes from polygon vertices
             for seg in img.get_segment_annotations() {
                 if seg.points.is_empty() {
