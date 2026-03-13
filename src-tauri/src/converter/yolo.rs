@@ -57,12 +57,23 @@ impl YoloConverter {
         }
 
         if task == "pose" {
-            if let Some(kpt_shape) = &data.metadata.kpt_shape {
-                yaml.push_str(&format!(
-                    "kpt_shape: [{}, {}]\n",
-                    kpt_shape[0],
-                    kpt_shape.get(1).unwrap_or(&2)
-                ));
+            let meta_kpts = data
+                .metadata
+                .kpt_shape
+                .as_ref()
+                .and_then(|s| s.first().copied())
+                .unwrap_or(0) as usize;
+            let data_kpts = data
+                .images
+                .iter()
+                .flat_map(|img| img.get_pose_annotations())
+                .map(|p| p.keypoints.len())
+                .max()
+                .unwrap_or(0);
+            let num_kpts = meta_kpts.max(data_kpts);
+            if num_kpts > 0 {
+                // Always dimension 3 (x, y, visibility)
+                yaml.push_str(&format!("kpt_shape: [{}, 3]\n", num_kpts));
             }
         }
 
@@ -82,8 +93,8 @@ impl YoloConverter {
             .join("\n")
     }
 
-    fn create_pose_label(&self, img: &ImageEntry, kpt_shape: Option<&[i32]>) -> String {
-        img.get_pose_annotations(kpt_shape)
+    fn create_pose_label(&self, img: &ImageEntry, num_kpts: usize) -> String {
+        img.get_pose_annotations()
             .iter()
             .map(|pose| {
                 let mut parts = vec![
@@ -94,11 +105,17 @@ impl YoloConverter {
                     format!("{:.6}", pose.bbox_h),
                 ];
 
-                for (kp_x, kp_y) in &pose.keypoints {
-                    let visibility = if *kp_x > 0.0 || *kp_y > 0.0 { 2 } else { 0 };
+                for (kp_x, kp_y, kp_v) in &pose.keypoints {
                     parts.push(format!("{:.6}", kp_x));
                     parts.push(format!("{:.6}", kp_y));
-                    parts.push(visibility.to_string());
+                    parts.push(format!("{}", kp_v.round() as i32));
+                }
+
+                // Pad missing keypoints with 0 0 0 (not labeled)
+                for _ in pose.keypoints.len()..num_kpts {
+                    parts.push("0.000000".to_string());
+                    parts.push("0.000000".to_string());
+                    parts.push("0".to_string());
                 }
 
                 parts.join(" ")
@@ -152,7 +169,25 @@ impl Converter for YoloConverter {
             );
         }
 
-        let kpt_shape = data.metadata.kpt_shape.as_deref();
+        // For pose: compute max keypoint count (max of metadata and actual data)
+        let num_kpts = if task == "pose" {
+            let meta_kpts = data
+                .metadata
+                .kpt_shape
+                .as_ref()
+                .and_then(|s| s.first().copied())
+                .unwrap_or(0) as usize;
+            let data_kpts = data
+                .images
+                .iter()
+                .flat_map(|img| img.get_pose_annotations())
+                .map(|p| p.keypoints.len())
+                .max()
+                .unwrap_or(0);
+            meta_kpts.max(data_kpts)
+        } else {
+            0
+        };
 
         // Process images by split
         let splits = [
@@ -166,7 +201,7 @@ impl Converter for YoloConverter {
                 let image_file = img.effective_file_name();
                 // Create label file
                 let label_content = match task.as_str() {
-                    "pose" => self.create_pose_label(img, kpt_shape),
+                    "pose" => self.create_pose_label(img, num_kpts),
                     "segment" => self.create_segment_label(img),
                     "classify" => {
                         // For classification, we use folder structure
@@ -395,5 +430,101 @@ mod tests {
         );
         assert!(files.contains_key("train/labels/Frame_98.txt"));
         assert!(files.contains_key("train/labels/Frame_98__abcd1234.txt"));
+    }
+
+    #[test]
+    fn pose_labels_pad_shorter_annotations_to_max_kpts() {
+        let mut class_names = HashMap::new();
+        class_names.insert("0".to_string(), "tiger".to_string());
+        class_names.insert("1".to_string(), "human".to_string());
+
+        // Tiger: 3 keypoints, Human: 2 keypoints
+        let data = make_data(
+            "pose",
+            class_names,
+            None,
+            vec![
+                ImageEntry {
+                    r#type: "image".to_string(),
+                    file: "tiger.jpg".to_string(),
+                    output_file: None,
+                    url: String::new(),
+                    width: 100,
+                    height: 100,
+                    split: "train".to_string(),
+                    annotations: Some(json!({
+                        "pose": [[0, 0.5, 0.5, 0.8, 0.8, 0.1, 0.2, 2, 0.3, 0.4, 2, 0.5, 0.6, 2]]
+                    })),
+                },
+                ImageEntry {
+                    r#type: "image".to_string(),
+                    file: "human.jpg".to_string(),
+                    output_file: None,
+                    url: String::new(),
+                    width: 100,
+                    height: 100,
+                    split: "train".to_string(),
+                    annotations: Some(json!({
+                        "pose": [[1, 0.5, 0.5, 0.6, 0.9, 0.2, 0.3, 2, 0.4, 0.5, 2]]
+                    })),
+                },
+            ],
+        );
+
+        let converter = YoloConverter::new();
+        let files = converter.convert(&data, &HashMap::new());
+
+        // Tiger: 3 kpts, no padding needed
+        let tiger_label =
+            std::str::from_utf8(files.get("train/labels/tiger.txt").unwrap()).unwrap();
+        let tiger_parts: Vec<&str> = tiger_label.split_whitespace().collect();
+        assert_eq!(tiger_parts.len(), 1 + 4 + 3 * 3); // class + bbox + 3 kpts * 3
+
+        // Human: 2 kpts + 1 padded = 3 kpts total
+        let human_label =
+            std::str::from_utf8(files.get("train/labels/human.txt").unwrap()).unwrap();
+        let human_parts: Vec<&str> = human_label.split_whitespace().collect();
+        assert_eq!(human_parts.len(), 1 + 4 + 3 * 3); // same length as tiger
+
+        // Verify padded keypoint is 0 0 0
+        assert_eq!(human_parts[human_parts.len() - 3], "0.000000");
+        assert_eq!(human_parts[human_parts.len() - 2], "0.000000");
+        assert_eq!(human_parts[human_parts.len() - 1], "0");
+
+        // data.yaml should have kpt_shape: [3, 3]
+        let yaml = std::str::from_utf8(files.get("data.yaml").unwrap()).unwrap();
+        assert!(yaml.contains("kpt_shape: [3, 3]"));
+    }
+
+    #[test]
+    fn pose_kpt_shape_uses_max_of_metadata_and_data() {
+        let mut class_names = HashMap::new();
+        class_names.insert("0".to_string(), "animal".to_string());
+
+        // Metadata says 2, but data has 3 keypoints
+        let data = make_data(
+            "pose",
+            class_names,
+            Some(vec![2, 3]),
+            vec![ImageEntry {
+                r#type: "image".to_string(),
+                file: "img.jpg".to_string(),
+                output_file: None,
+                url: String::new(),
+                width: 100,
+                height: 100,
+                split: "train".to_string(),
+                annotations: Some(json!({
+                    "pose": [[0, 0.5, 0.5, 0.8, 0.8, 0.1, 0.2, 2, 0.3, 0.4, 2, 0.5, 0.6, 2]]
+                })),
+            }],
+        );
+
+        let converter = YoloConverter::new();
+        let files = converter.convert(&data, &HashMap::new());
+
+        let yaml = std::str::from_utf8(files.get("data.yaml").unwrap()).unwrap();
+        // Should use 3 (actual max) not 2 (stale metadata)
+        assert!(yaml.contains("kpt_shape: [3, 3]"));
     }
 }
