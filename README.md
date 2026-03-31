@@ -11,12 +11,35 @@
 [![Rust](https://img.shields.io/badge/Rust-%23dea584.svg?logo=rust&logoColor=black)](#tech-stack)
 [![TypeScript](https://img.shields.io/badge/TypeScript-%23007ACC.svg?logo=typescript&logoColor=white)](#tech-stack)
 
+[![CI](https://github.com/amanharshx/yolo-ndjson-zip/actions/workflows/ci.yml/badge.svg)](https://github.com/amanharshx/yolo-ndjson-zip/actions/workflows/ci.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/amanharshx/yolo-ndjson-zip)](https://github.com/amanharshx/yolo-ndjson-zip/releases)
+
 <br>
 
 <img src="assets/readme-demo.gif" width="720" alt="YOLO NDJSON Converter demo">
 
 </div>
 <br>
+
+> Select your Ultralytics NDJSON export, pick an output format, and get a ready-to-train ZIP - everything runs locally, nothing leaves your machine.
+
+---
+
+## Table of Contents
+
+- [Features](#features)
+- [Supported Formats](#supported-formats)
+- [Installation](#installation)
+- [NDJSON Input Format](#ndjson-input-format)
+- [Roadmap](#roadmap)
+- [Tech Stack](#tech-stack)
+- [Releases & Versioning](#releases--versioning)
+- [Update Security](#update-security)
+- [Contributing](#contributing)
+- [Security](#security)
+- [License](#license)
+
+---
 
 [**YOLO NDJSON Converter**](https://yolondjson.zip) is a desktop app that converts [Ultralytics](https://www.ultralytics.com/) YOLO's NDJSON annotation exports into ready-to-use datasets for YOLO, COCO, Pascal VOC, and other ML formats. Select your file, pick a format, and get a ZIP with images, labels, and config files.
 
@@ -28,6 +51,8 @@
 - **Privacy-First** - Everything runs locally; your data never leaves your device
 - **Cross-Platform** - macOS, Windows, and Linux
 - **~5 MB Binary** - Tauri + Rust keeps the app tiny compared to Electron alternatives
+
+---
 
 ## Supported Formats
 
@@ -45,6 +70,8 @@
 | Pascal VOC XML | ✅ | Detection, Segmentation, Classification |
 | CreateML JSON | 🔜 | Detection, Classification |
 | TFRecord | 🔜 | Detection |
+
+---
 
 ## Installation
 
@@ -122,7 +149,7 @@ bun run tauri build      # local production build
 ```
 
 > **Note:** Local builds are unsigned and intended for development only. Official signed builds are generated automatically via GitHub Releases.
-> 
+>
 > **Note:** The backend Sentry DSN (if set) is compiled in at build time via `SENTRY_DSN_BACKEND`.
 
 ### Tests
@@ -135,6 +162,8 @@ cd src-tauri && cargo test
 bun run test
 ```
 
+---
+
 ## NDJSON Input Format
 
 The app expects newline-delimited JSON with this structure:
@@ -145,11 +174,35 @@ The app expects newline-delimited JSON with this structure:
 {"type":"image","file":"img2.jpg","url":"https://...","width":640,"height":480,"split":"valid","annotations":{"bboxes":[[1,0.3,0.4,0.1,0.2]]}}
 ```
 
+---
+
+## Roadmap
+
+### Export Formats
+
+- [x] YOLO (YOLOv5 → YOLO26)
+- [x] COCO JSON
+- [x] Pascal VOC XML
+- [ ] CreateML JSON *(coming soon)*
+- [ ] TFRecord *(coming soon)*
+
+### Task Types
+
+- [x] Detection
+- [x] Segmentation
+- [x] Pose Estimation
+- [x] Classification
+- [x] OBB (Oriented Bounding Box)
+
+---
+
 ## Tech Stack
 
 - **Frontend** - React 19 + TypeScript, Tailwind CSS, Vite
 - **Backend** - Rust + Tauri v2
 - **Package Manager** - Bun
+
+---
 
 ## Releases & Versioning
 
@@ -161,11 +214,15 @@ This project uses automated releases.
 
 All official binaries are available on the [GitHub Releases](https://github.com/amanharshx/yolo-ndjson-zip/releases) page.
 
+---
+
 ## Update Security
 
 All releases are cryptographically signed.
 
 The built-in updater verifies signatures before installing updates to ensure authenticity and prevent tampering.
+
+---
 
 ## Contributing
 
