@@ -39,6 +39,7 @@ jobs:
               - 'public/**'
               - 'index.html'
               - 'vite.config.ts'
+              - 'vitest.config.ts'
               - 'package.json'
               - 'bun.lock'
 
