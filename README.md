@@ -12,6 +12,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-%23007ACC.svg?logo=typescript&logoColor=white)](#tech-stack)
 
 [![CI](https://github.com/amanharshx/yolo-ndjson-zip/actions/workflows/ci.yml/badge.svg)](https://github.com/amanharshx/yolo-ndjson-zip/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/amanharshx/yolo-ndjson-zip/graph/badge.svg)](https://codecov.io/gh/amanharshx/yolo-ndjson-zip)
 [![GitHub Release](https://img.shields.io/github/v/release/amanharshx/yolo-ndjson-zip)](https://github.com/amanharshx/yolo-ndjson-zip/releases)
 
 <br>
