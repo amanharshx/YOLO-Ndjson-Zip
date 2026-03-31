@@ -140,6 +140,8 @@ jobs:
   # Coverage collection and upload to Codecov
   coverage:
     name: Coverage
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
 
     steps:
