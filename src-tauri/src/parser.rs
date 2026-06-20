@@ -564,6 +564,19 @@ mod tests {
     }
 
     #[test]
+    fn parse_semantic_ndjson_reads_polygon_segments() {
+        let content = r#"{"type":"dataset","task":"semantic","name":"city","class_names":{"0":"road"}}
+{"type":"image","file":"street.jpg","width":640,"height":640,"split":"train","annotations":{"segments":[[0,0.1,0.1,0.2,0.1,0.2,0.2]]}}"#;
+
+        let data = parse_ndjson(content).unwrap();
+        assert_eq!(data.metadata.task, "semantic");
+        let segments = data.images[0].get_segment_annotations();
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].class_id, 0);
+        assert_eq!(segments[0].points.len(), 3);
+    }
+
+    #[test]
     fn get_obb_annotations_parses_correctly() {
         let entry = ImageEntry {
             r#type: "image".to_string(),

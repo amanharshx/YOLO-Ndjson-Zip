@@ -61,7 +61,11 @@ impl PascalVocConverter {
         Self::write_element(
             &mut writer,
             "segmented",
-            if task == "segment" { "1" } else { "0" },
+            if task == "segment" || task == "semantic" {
+                "1"
+            } else {
+                "0"
+            },
         );
 
         if task == "obb" {
@@ -111,7 +115,7 @@ impl PascalVocConverter {
 
                 writer.write_event(Event::End(BytesEnd::new("object"))).ok();
             }
-        } else if task == "segment" {
+        } else if task == "segment" || task == "semantic" {
             // Segmentation: derive bounding boxes from polygon vertices
             for seg in img.get_segment_annotations() {
                 if seg.points.is_empty() {

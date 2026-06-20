@@ -47,7 +47,7 @@
 ## Features
 
 - **12 Output Formats** - YOLO26 through Darknet, COCO JSON, Pascal VOC, TFRecord, CreateML
-- **5 Task Types** - Detection, Segmentation, Pose Estimation, Classification, OBB
+- **6 Task Types** - Detection, Segmentation, Semantic Segmentation, Pose Estimation, Classification, OBB
 - **Parallel Downloads** - 100 concurrent connections for fast image fetching
 - **Privacy-First** - Everything runs locally; your data never leaves your device
 - **Cross-Platform** - macOS, Windows, and Linux
@@ -59,16 +59,16 @@
 
 | Format | Status | Compatible Tasks |
 |--------|:------:|------------------|
-| YOLO26 | ✅ | Detection, Segmentation, Pose, Classification, OBB |
-| YOLOv12 | ✅ | Detection, Segmentation, Pose, Classification, OBB |
-| YOLO11 | ✅ | Detection, Segmentation, Pose, Classification, OBB |
-| YOLOv9 | ✅ | Detection, Segmentation |
-| YOLOv8 | ✅ | Detection, Segmentation, Pose, Classification, OBB |
+| YOLO26 | ✅ | Detection, Segmentation, Semantic, Pose, Classification, OBB |
+| YOLOv12 | ✅ | Detection, Segmentation, Semantic, Pose, Classification, OBB |
+| YOLO11 | ✅ | Detection, Segmentation, Semantic, Pose, Classification, OBB |
+| YOLOv9 | ✅ | Detection, Segmentation, Semantic |
+| YOLOv8 | ✅ | Detection, Segmentation, Semantic, Pose, Classification, OBB |
 | YOLOv7 | ✅ | Detection |
-| YOLOv5 | ✅ | Detection, Segmentation, Classification |
+| YOLOv5 | ✅ | Detection, Segmentation, Semantic, Classification |
 | YOLO Darknet | ✅ | Detection, Classification |
-| COCO JSON | ✅ | Detection, Segmentation, Pose |
-| Pascal VOC XML | ✅ | Detection, Segmentation, Classification |
+| COCO JSON | ✅ | Detection, Segmentation, Semantic, Pose |
+| Pascal VOC XML | ✅ | Detection, Segmentation, Semantic, Classification |
 | CreateML JSON | 🔜 | Detection, Classification |
 | TFRecord | 🔜 | Detection |
 
@@ -191,6 +191,7 @@ The app expects newline-delimited JSON with this structure:
 
 - [x] Detection
 - [x] Segmentation
+- [x] Semantic Segmentation
 - [x] Pose Estimation
 - [x] Classification
 - [x] OBB (Oriented Bounding Box)

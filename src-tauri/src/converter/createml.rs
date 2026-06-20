@@ -130,6 +130,59 @@ impl CreateMlConverter {
         serde_json::to_string_pretty(&result).unwrap_or_default()
     }
 
+    fn create_createml_segment_json(
+        &self,
+        images: &[&ImageEntry],
+        class_names: &HashMap<i32, String>,
+    ) -> String {
+        let result: Vec<CreateMlImage> = images
+            .iter()
+            .map(|img| {
+                let annotations = img
+                    .get_segment_annotations()
+                    .iter()
+                    .filter(|seg| !seg.points.is_empty())
+                    .map(|seg| {
+                        let class_name = class_names
+                            .get(&seg.class_id)
+                            .cloned()
+                            .unwrap_or_else(|| format!("class_{}", seg.class_id));
+
+                        // Derive axis-aligned bbox from polygon vertices
+                        let xs: Vec<f64> = seg.points.iter().map(|(x, _)| *x).collect();
+                        let ys: Vec<f64> = seg.points.iter().map(|(_, y)| *y).collect();
+                        let min_x = xs.iter().cloned().fold(f64::MAX, f64::min);
+                        let max_x = xs.iter().cloned().fold(f64::MIN, f64::max);
+                        let min_y = ys.iter().cloned().fold(f64::MAX, f64::min);
+                        let max_y = ys.iter().cloned().fold(f64::MIN, f64::max);
+                        let cx = (min_x + max_x) / 2.0 * img.width as f64;
+                        let cy = (min_y + max_y) / 2.0 * img.height as f64;
+                        let w = (max_x - min_x) * img.width as f64;
+                        let h = (max_y - min_y) * img.height as f64;
+
+                        CreateMlAnnotation {
+                            label: class_name,
+                            coordinates: CreateMlCoordinates {
+                                x: cx,
+                                y: cy,
+                                width: w,
+                                height: h,
+                            },
+                        }
+                    })
+                    .collect();
+
+                CreateMlImage {
+                    image: img.effective_file_name().to_string(),
+                    image_url: img.url.clone(),
+                    annotations,
+                }
+            })
+            .collect();
+
+        serde_json::to_string_pretty(&result).unwrap_or_default()
+    }
+
     fn create_createml_classification_json(
         &self,
         images: &[&ImageEntry],
@@ -179,6 +232,7 @@ impl Converter for CreateMlConverter {
             let json = match task.as_str() {
                 "classify" => self.create_createml_classification_json(images, &class_names),
                 "obb" => self.create_createml_obb_json(images, &class_names),
+                "segment" | "semantic" => self.create_createml_segment_json(images, &class_names),
                 _ => self.create_createml_json(images, &class_names),
             };
             files.insert(format!("{}.json", split), json.into_bytes());
