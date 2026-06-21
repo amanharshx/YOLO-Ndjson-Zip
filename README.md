@@ -60,17 +60,19 @@
 | Format | Status | Compatible Tasks |
 |--------|:------:|------------------|
 | YOLO26 | ✅ | Detection, Segmentation, Semantic, Pose, Classification, OBB |
-| YOLOv12 | ✅ | Detection, Segmentation, Semantic, Pose, Classification, OBB |
-| YOLO11 | ✅ | Detection, Segmentation, Semantic, Pose, Classification, OBB |
-| YOLOv9 | ✅ | Detection, Segmentation, Semantic |
-| YOLOv8 | ✅ | Detection, Segmentation, Semantic, Pose, Classification, OBB |
+| YOLOv12 | ✅ | Detection, Segmentation, Pose, Classification, OBB |
+| YOLO11 | ✅ | Detection, Segmentation, Pose, Classification, OBB |
+| YOLOv9 | ✅ | Detection, Segmentation |
+| YOLOv8 | ✅ | Detection, Segmentation, Pose, Classification, OBB |
 | YOLOv7 | ✅ | Detection |
-| YOLOv5 | ✅ | Detection, Segmentation, Semantic, Classification |
+| YOLOv5 | ✅ | Detection, Segmentation, Classification |
 | YOLO Darknet | ✅ | Detection, Classification |
-| COCO JSON | ✅ | Detection, Segmentation, Semantic, Pose |
-| Pascal VOC XML | ✅ | Detection, Segmentation, Semantic, Classification |
+| COCO JSON | ✅ | Detection, Segmentation, Pose |
+| Pascal VOC XML | ✅ | Detection, Segmentation, Classification |
 | CreateML JSON | 🔜 | Detection, Classification |
 | TFRecord | 🔜 | Detection |
+
+> **Note on Semantic Segmentation:** Semantic datasets are exported as **polygon segmentation labels** (identical in shape to instance-segmentation polygons). Only **YOLO26** trains them *as semantic* (omit `masks_dir` so the loader rasterizes polygons → dense masks). Other YOLO versions, COCO, and Pascal VOC can still use the exported polygons as **instance-segmentation annotations**. Formats that cannot represent polygons (YOLO Darknet, CreateML, TFRecord) are rejected for semantic datasets.
 
 ---
 
