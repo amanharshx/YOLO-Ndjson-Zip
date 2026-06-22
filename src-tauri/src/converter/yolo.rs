@@ -217,7 +217,7 @@ impl Converter for YoloConverter {
                 // Create label file
                 let label_content = match task.as_str() {
                     "pose" => self.create_pose_label(img, num_kpts),
-                    "segment" => self.create_segment_label(img),
+                    "segment" | "semantic" => self.create_segment_label(img),
                     "obb" => self.create_obb_label(img),
                     "classify" => {
                         // For classification, we use folder structure
@@ -542,6 +542,41 @@ mod tests {
         let yaml = std::str::from_utf8(files.get("data.yaml").unwrap()).unwrap();
         // Should use 3 (actual max) not 2 (stale metadata)
         assert!(yaml.contains("kpt_shape: [3, 3]"));
+    }
+
+    #[test]
+    fn semantic_labels_use_polygon_format() {
+        let mut class_names = HashMap::new();
+        class_names.insert("0".to_string(), "road".to_string());
+
+        let data = make_data(
+            "semantic",
+            class_names,
+            None,
+            vec![ImageEntry {
+                r#type: "image".to_string(),
+                file: "street.jpg".to_string(),
+                output_file: None,
+                url: String::new(),
+                width: 640,
+                height: 640,
+                split: "train".to_string(),
+                annotations: Some(json!({
+                    "segments": [[0, 0.1, 0.1, 0.2, 0.1, 0.2, 0.2, 0.1, 0.2]]
+                })),
+            }],
+        );
+
+        let converter = YoloConverter::new();
+        let files = converter.convert(&data, &HashMap::new());
+
+        // Semantic reuses the polygon label format: class_id x1 y1 x2 y2 ...
+        let label = std::str::from_utf8(files.get("train/labels/street.txt").unwrap()).unwrap();
+        let parts: Vec<&str> = label.split_whitespace().collect();
+        assert_eq!(parts.len(), 9); // class + 4 (x,y) pairs
+        assert_eq!(parts[0], "0");
+        assert_eq!(parts[1], "0.100000");
+        assert_eq!(parts[2], "0.100000");
     }
 
     #[test]

@@ -137,7 +137,7 @@ impl CocoConverter {
             });
 
             match task.as_str() {
-                "segment" => {
+                "segment" | "semantic" => {
                     for seg in img.get_segment_annotations() {
                         if seg.points.is_empty() {
                             continue;

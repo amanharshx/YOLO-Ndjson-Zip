@@ -4,7 +4,7 @@ mod parser;
 
 use converter::get_converter;
 use downloader::{DownloadResult, Downloader, ProgressEvent};
-use parser::{normalize_split, parse_ndjson, ImageEntry};
+use parser::{normalize_split, parse_ndjson, ImageEntry, NDJSONData};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -137,6 +137,26 @@ fn next_unique_file_name(
     }
 }
 
+/// True when a `semantic` dataset has no polygon segments in any image.
+/// Per-image empty is still valid; this only triggers when the entire dataset
+/// is devoid of polygons (e.g. PNG-mask-origin exports).
+fn semantic_dataset_has_no_polygons(data: &NDJSONData) -> bool {
+    data.metadata.task == "semantic"
+        && data
+            .images
+            .iter()
+            .all(|img| img.get_segment_annotations().is_empty())
+}
+
+/// Semantic datasets are polygon data, so they can only target polygon-capable
+/// formats. `yolo_darknet`, `createml`, and `tfrecord` cannot represent polygons.
+fn semantic_format_supported(format: &str) -> bool {
+    matches!(
+        format.to_ascii_lowercase().as_str(),
+        "yolo" | "coco" | "pascal_voc" | "voc"
+    )
+}
+
 fn prepare_images_with_unique_output_names(images: &[ImageEntry]) -> Vec<ImageEntry> {
     let mut seen_entries: HashMap<(String, String), usize> = HashMap::new();
     let mut used_names_by_split: HashMap<String, HashSet<String>> = HashMap::new();
@@ -218,6 +238,25 @@ async fn convert_ndjson(
             item: Some(format!("Parsed {} images", data.images.len())),
         })
         .ok();
+
+    // Semantic segmentation is polygon data; only polygon-capable formats can
+    // represent it. Reject other formats (e.g. CreateML/TFRecord/Darknet) up front.
+    if data.metadata.task == "semantic" && !semantic_format_supported(&format) {
+        return Err(format!(
+            "The '{}' format does not support semantic segmentation datasets. \
+             Use YOLO, COCO, or Pascal VOC.",
+            format
+        ));
+    }
+
+    // Semantic datasets carry polygon segments. PNG-mask-origin exports arrive
+    // with no real polygons (and often junk class names), which would silently
+    // produce an empty dataset. Fail fast before downloading anything.
+    if semantic_dataset_has_no_polygons(&data) {
+        return Err("Semantic dataset has no polygon segments in any image. \
+             PNG-mask exports are not supported; provide polygon annotations."
+            .to_string());
+    }
 
     // Download images if requested
     let download_result = if include_images {
@@ -354,9 +393,54 @@ pub fn run() {
 mod tests {
     use super::{
         file_name_with_suffix, is_ndjson_size_allowed, normalize_zip_path,
-        prepare_images_with_unique_output_names, short_stable_hash, MAX_NDJSON_BYTES,
+        prepare_images_with_unique_output_names, semantic_dataset_has_no_polygons,
+        semantic_format_supported, short_stable_hash, MAX_NDJSON_BYTES,
     };
     use crate::parser::parse_ndjson;
+
+    #[test]
+    fn semantic_format_supported_allows_polygon_formats() {
+        assert!(semantic_format_supported("yolo"));
+        assert!(semantic_format_supported("coco"));
+        assert!(semantic_format_supported("pascal_voc"));
+        assert!(semantic_format_supported("voc"));
+    }
+
+    #[test]
+    fn semantic_format_supported_rejects_non_polygon_formats() {
+        assert!(!semantic_format_supported("yolo_darknet"));
+        assert!(!semantic_format_supported("createml"));
+        assert!(!semantic_format_supported("tfrecord"));
+    }
+
+    #[test]
+    fn semantic_guard_flags_dataset_without_polygons() {
+        // PNG-mask-origin export: semantic task, junk classes, no segments.
+        let content = r#"{"type":"dataset","task":"semantic","name":"masks","class_names":{"0":"0","1":"1"}}
+{"type":"image","file":"a.png","width":512,"height":512,"split":"train","annotations":{}}
+{"type":"image","file":"b.png","width":512,"height":512,"split":"train","annotations":{"segments":[]}}"#;
+        let data = parse_ndjson(content).unwrap();
+        assert!(semantic_dataset_has_no_polygons(&data));
+    }
+
+    #[test]
+    fn semantic_guard_allows_dataset_with_any_polygon() {
+        // One empty image is fine as long as the dataset has polygons somewhere.
+        let content = r#"{"type":"dataset","task":"semantic","name":"city","class_names":{"0":"road"}}
+{"type":"image","file":"a.png","width":512,"height":512,"split":"train","annotations":{}}
+{"type":"image","file":"b.png","width":512,"height":512,"split":"train","annotations":{"segments":[[0,0.1,0.1,0.2,0.1,0.2,0.2]]}}"#;
+        let data = parse_ndjson(content).unwrap();
+        assert!(!semantic_dataset_has_no_polygons(&data));
+    }
+
+    #[test]
+    fn semantic_guard_ignores_non_semantic_tasks() {
+        // Detection dataset with no polygons must not trip the semantic guard.
+        let content = r#"{"type":"dataset","task":"detect","name":"d","class_names":{"0":"cat"}}
+{"type":"image","file":"a.jpg","width":512,"height":512,"split":"train","annotations":{"bboxes":[[0,0.5,0.5,0.2,0.2]]}}"#;
+        let data = parse_ndjson(content).unwrap();
+        assert!(!semantic_dataset_has_no_polygons(&data));
+    }
 
     #[test]
     fn normalize_zip_path_accepts_simple_paths() {

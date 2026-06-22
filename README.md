@@ -47,7 +47,7 @@
 ## Features
 
 - **12 Output Formats** - YOLO26 through Darknet, COCO JSON, Pascal VOC, TFRecord, CreateML
-- **5 Task Types** - Detection, Segmentation, Pose Estimation, Classification, OBB
+- **6 Task Types** - Detection, Segmentation, Semantic Segmentation, Pose Estimation, Classification, OBB
 - **Parallel Downloads** - 100 concurrent connections for fast image fetching
 - **Privacy-First** - Everything runs locally; your data never leaves your device
 - **Cross-Platform** - macOS, Windows, and Linux
@@ -59,7 +59,7 @@
 
 | Format | Status | Compatible Tasks |
 |--------|:------:|------------------|
-| YOLO26 | ✅ | Detection, Segmentation, Pose, Classification, OBB |
+| YOLO26 | ✅ | Detection, Segmentation, Semantic, Pose, Classification, OBB |
 | YOLOv12 | ✅ | Detection, Segmentation, Pose, Classification, OBB |
 | YOLO11 | ✅ | Detection, Segmentation, Pose, Classification, OBB |
 | YOLOv9 | ✅ | Detection, Segmentation |
@@ -71,6 +71,8 @@
 | Pascal VOC XML | ✅ | Detection, Segmentation, Classification |
 | CreateML JSON | 🔜 | Detection, Classification |
 | TFRecord | 🔜 | Detection |
+
+> **Note on Semantic Segmentation:** Semantic datasets are exported as **polygon segmentation labels** (identical in shape to instance-segmentation polygons). Only **YOLO26** trains them *as semantic* (omit `masks_dir` so the loader rasterizes polygons → dense masks). Other YOLO versions, COCO, and Pascal VOC can still use the exported polygons as **instance-segmentation annotations**. Formats that cannot represent polygons (YOLO Darknet, CreateML, TFRecord) are rejected for semantic datasets.
 
 ---
 
@@ -191,6 +193,7 @@ The app expects newline-delimited JSON with this structure:
 
 - [x] Detection
 - [x] Segmentation
+- [x] Semantic Segmentation
 - [x] Pose Estimation
 - [x] Classification
 - [x] OBB (Oriented Bounding Box)
