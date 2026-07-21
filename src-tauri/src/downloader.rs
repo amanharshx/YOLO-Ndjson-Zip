@@ -30,6 +30,7 @@ impl Downloader {
         let client = Client::builder()
             .pool_max_idle_per_host(concurrency)
             .timeout(std::time::Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
@@ -116,6 +117,11 @@ impl Downloader {
                                     }
                                 }
                             } else {
+                                eprintln!(
+                                    "Skipping download for '{}': server returned HTTP {}",
+                                    item_label,
+                                    response.status()
+                                );
                                 failed.fetch_add(1, Ordering::SeqCst);
                             }
                         }
@@ -274,6 +280,65 @@ async fn read_response_with_limit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::time::{timeout, Duration};
+
+    #[tokio::test]
+    async fn downloader_client_does_not_follow_redirects() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let server_request_count = Arc::clone(&request_count);
+
+        let server = tokio::spawn(async move {
+            for request_number in 0..2 {
+                let accepted = timeout(Duration::from_millis(250), listener.accept()).await;
+                let Ok(Ok((mut stream, _))) = accepted else {
+                    break;
+                };
+
+                let mut request = [0_u8; 1024];
+                let bytes_read = stream.read(&mut request).await.unwrap();
+                if bytes_read == 0 {
+                    break;
+                }
+                server_request_count.fetch_add(1, Ordering::SeqCst);
+
+                if request_number == 0 {
+                    stream
+                        .write_all(
+                            format!(
+                                "HTTP/1.1 302 Found\r\nLocation: http://{address}/internal\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                            )
+                            .as_bytes(),
+                        )
+                        .await
+                        .unwrap();
+                } else {
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .await
+                        .unwrap();
+                }
+            }
+        });
+
+        let downloader = Downloader::new(1).unwrap();
+        let response = downloader
+            .client
+            .get(format!("http://{address}/public"))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+        server.await.unwrap();
+        assert_eq!(request_count.load(Ordering::SeqCst), 1);
+    }
 
     #[tokio::test]
     async fn validate_url_accepts_public_ipv4_https() {
