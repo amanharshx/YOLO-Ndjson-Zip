@@ -204,7 +204,7 @@ async fn convert_ndjson(
     channel: Channel<ProgressEvent>,
 ) -> Result<ConvertResult, String> {
     let metadata = std::fs::metadata(&file_path)
-        .map_err(|e| format!("Failed to inspect file '{}': {}", &file_path, e))?;
+        .map_err(|e| format!("Failed to inspect file '{}': {}", file_path, e))?;
     if !is_ndjson_size_allowed(metadata.len()) {
         return Err(format!(
             "NDJSON file is too large ({} bytes). Maximum allowed is {} bytes.",
@@ -215,7 +215,7 @@ async fn convert_ndjson(
 
     // Read the NDJSON file
     let content = std::fs::read_to_string(&file_path)
-        .map_err(|e| format!("Failed to read file '{}': {}", &file_path, e))?;
+        .map_err(|e| format!("Failed to read file '{}': {}", file_path, e))?;
 
     // Parse NDJSON
     channel
