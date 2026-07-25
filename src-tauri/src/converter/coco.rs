@@ -79,6 +79,7 @@ impl CocoConverter {
         data: &NDJSONData,
         _split: &str,
         num_kpts: usize,
+        kpt_dims: usize,
     ) -> String {
         let class_names = get_class_list(data);
         let now = Utc::now();
@@ -177,30 +178,29 @@ impl CocoConverter {
                     }
                 }
                 "pose" => {
-                    for pose in img.get_pose_annotations() {
+                    for pose in img.get_pose_annotations(kpt_dims) {
                         let x_min = (pose.bbox_x - pose.bbox_w / 2.0) * img.width as f64;
                         let y_min = (pose.bbox_y - pose.bbox_h / 2.0) * img.height as f64;
                         let w = pose.bbox_w * img.width as f64;
                         let h = pose.bbox_h * img.height as f64;
 
-                        let mut kps: Vec<f64> = Vec::new();
+                        let mut kps = Vec::with_capacity(pose.num_keypoints() * 3);
                         let mut visible_count = 0;
-                        for (kp_x, kp_y, kp_v) in &pose.keypoints {
-                            let abs_x = kp_x * img.width as f64;
-                            let abs_y = kp_y * img.height as f64;
-                            if *kp_v > 0.0 {
+                        for keypoint in pose.keypoints.chunks_exact(pose.dims) {
+                            let abs_x = keypoint[0] * img.width as f64;
+                            let abs_y = keypoint[1] * img.height as f64;
+                            let visibility = if pose.dims == 3 {
+                                keypoint[2]
+                            } else {
+                                // COCO requires visibility; 2D NDJSON points are labeled and visible.
+                                2.0
+                            };
+                            if visibility > 0.0 {
                                 visible_count += 1;
                             }
                             kps.push(abs_x);
                             kps.push(abs_y);
-                            kps.push(*kp_v);
-                        }
-
-                        // Pad missing keypoints with 0,0,0 (not labeled)
-                        for _ in pose.keypoints.len()..num_kpts {
-                            kps.push(0.0);
-                            kps.push(0.0);
-                            kps.push(0.0);
+                            kps.push(visibility);
                         }
 
                         coco.annotations.push(CocoAnnotation {
@@ -291,24 +291,18 @@ impl Converter for CocoConverter {
         let mut files: HashMap<String, Vec<u8>> = HashMap::new();
         let task = &data.metadata.task;
 
-        // For pose: compute max keypoint count globally (max of metadata and actual data)
-        let num_kpts = if task == "pose" {
-            let meta_kpts = data
-                .metadata
+        // convert_ndjson validates pose rows and populates kpt_shape before conversion.
+        let (num_kpts, kpt_dims) = if task == "pose" {
+            data.metadata
                 .kpt_shape
                 .as_ref()
-                .and_then(|s| s.first().copied())
-                .unwrap_or(0) as usize;
-            let data_kpts = data
-                .images
-                .iter()
-                .flat_map(|img| img.get_pose_annotations())
-                .map(|p| p.keypoints.len())
-                .max()
-                .unwrap_or(0);
-            meta_kpts.max(data_kpts)
+                .and_then(|shape| match shape.as_slice() {
+                    [num_keypoints, dims] => Some((*num_keypoints as usize, *dims as usize)),
+                    _ => None,
+                })
+                .unwrap_or((0, 3))
         } else {
-            0
+            (0, 0)
         };
 
         let splits = [
@@ -333,7 +327,7 @@ impl Converter for CocoConverter {
             }
 
             // Create JSON at {split}/_annotations.coco.json
-            let coco_json = self.create_coco_json(images, data, split, num_kpts);
+            let coco_json = self.create_coco_json(images, data, split, num_kpts, kpt_dims);
             files.insert(
                 format!("{}/_annotations.coco.json", split),
                 coco_json.into_bytes(),
@@ -447,6 +441,91 @@ mod tests {
                 .and_then(|img| img.get("file_name"))
                 .and_then(|v| v.as_str()),
             Some("img1__abcd1234.jpg")
+        );
+    }
+
+    #[test]
+    fn pose_conversion_synthesizes_coco_visibility_for_two_dimensional_keypoints() {
+        let data = NDJSONData {
+            metadata: DatasetMetadata {
+                r#type: "dataset".to_string(),
+                task: "pose".to_string(),
+                name: "pose".to_string(),
+                description: String::new(),
+                bytes: 0,
+                url: String::new(),
+                class_names: HashMap::from([("0".to_string(), "object".to_string())]),
+                kpt_shape: Some(vec![2, 2]),
+                version: "1".to_string(),
+            },
+            images: vec![ImageEntry {
+                r#type: "image".to_string(),
+                file: "pose.jpg".to_string(),
+                output_file: None,
+                url: String::new(),
+                width: 100,
+                height: 200,
+                split: "train".to_string(),
+                annotations: Some(json!({
+                    "pose": [[0, 0.5, 0.5, 0.4, 0.6, 0.1, 0.2, 0.3, 0.4]]
+                })),
+            }],
+        };
+
+        let files = CocoConverter::new().convert(&data, &HashMap::new());
+        let coco: serde_json::Value =
+            serde_json::from_slice(files.get("train/_annotations.coco.json").unwrap()).unwrap();
+        let annotation = &coco["annotations"][0];
+
+        assert_eq!(
+            annotation["keypoints"],
+            json!([10.0, 40.0, 2.0, 30.0, 80.0, 2.0])
+        );
+        assert_eq!(annotation["num_keypoints"], 2);
+        assert_eq!(annotation["keypoints"].as_array().unwrap().len(), 6);
+    }
+
+    #[test]
+    fn pose_conversion_preserves_three_dimensional_visibility() {
+        let data = NDJSONData {
+            metadata: DatasetMetadata {
+                r#type: "dataset".to_string(),
+                task: "pose".to_string(),
+                name: "pose".to_string(),
+                description: String::new(),
+                bytes: 0,
+                url: String::new(),
+                class_names: HashMap::from([("0".to_string(), "object".to_string())]),
+                kpt_shape: Some(vec![2, 3]),
+                version: "1".to_string(),
+            },
+            images: vec![ImageEntry {
+                r#type: "image".to_string(),
+                file: "pose.jpg".to_string(),
+                output_file: None,
+                url: String::new(),
+                width: 100,
+                height: 200,
+                split: "train".to_string(),
+                annotations: Some(json!({
+                    "pose": [[0, 0.5, 0.5, 0.4, 0.6, 0.1, 0.2, 1, 0.3, 0.4, 2]]
+                })),
+            }],
+        };
+
+        let files = CocoConverter::new().convert(&data, &HashMap::new());
+        let coco: serde_json::Value =
+            serde_json::from_slice(files.get("train/_annotations.coco.json").unwrap()).unwrap();
+        let annotation = &coco["annotations"][0];
+
+        assert_eq!(
+            annotation["keypoints"],
+            json!([10.0, 40.0, 1.0, 30.0, 80.0, 2.0])
+        );
+        assert_eq!(annotation["num_keypoints"], 2);
+        assert_eq!(
+            coco["categories"][0]["keypoints"].as_array().unwrap().len(),
+            2
         );
     }
 }
