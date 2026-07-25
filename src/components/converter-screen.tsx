@@ -5,6 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { formats, type ConvertResult } from "@/lib/types";
+import {
+  buildDownloadFailureMessage,
+  type DownloadFailureMessage,
+} from "@/lib/download-failures";
 import { useConverter } from "@/hooks/use-converter";
 import { ConverterHeader } from "@/components/converter-header";
 import { FormatButton } from "@/components/format-button";
@@ -19,21 +23,52 @@ import {
   FolderOpen,
 } from "lucide-react";
 
-export function getDownloadWarning(result: ConvertResult): string | null {
-  if (result.omitted_images === 0) {
-    return null;
-  }
+export function getDownloadMessage(
+  result: ConvertResult,
+): DownloadFailureMessage | null {
+  return buildDownloadFailureMessage(
+    result.failure_summary,
+    result.omitted_images,
+    false,
+  );
+}
 
-  const imageNoun = result.omitted_images === 1 ? "image" : "images";
-  const annotationPronoun = result.omitted_images === 1 ? "its" : "their";
-  let warning = `${result.omitted_images} ${imageNoun} and ${annotationPronoun} corresponding annotations were omitted.`;
+export function DownloadFailureDetails({
+  message,
+  tone = "warning",
+}: {
+  message: DownloadFailureMessage;
+  tone?: "warning" | "error";
+}) {
+  const color =
+    tone === "error" ? "text-destructive" : "text-amber-700";
 
-  if (result.expired_url_failures > 0) {
-    const downloadNoun = result.expired_url_failures === 1 ? "download" : "downloads";
-    warning += ` ${result.expired_url_failures} ${downloadNoun} returned HTTP 403; signed URLs may have expired. Re-export the dataset and try again.`;
-  }
-
-  return warning;
+  return (
+    <div className={`mt-3 text-left text-xs ${color}`}>
+      <p className="font-medium">{message.primary}</p>
+      {message.breakdown.length > 0 && (
+        <details className="mt-2">
+          <summary className="cursor-pointer font-medium">
+            Download details
+          </summary>
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            {message.breakdown.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            className="mt-2 underline underline-offset-2"
+            onClick={() => {
+              void navigator.clipboard?.writeText(message.diagnostics);
+            }}
+          >
+            Copy details
+          </button>
+        </details>
+      )}
+    </div>
+  );
 }
 
 export function ConverterScreen({ onBack }: { onBack: () => void }) {
@@ -58,7 +93,10 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
   } = useConverter();
 
   const [isDragging, setIsDragging] = useState(false);
-  const downloadWarning = result ? getDownloadWarning(result) : null;
+  const downloadMessage = result ? getDownloadMessage(result) : null;
+  const errorDownloadMessage = error?.failure_summary
+    ? buildDownloadFailureMessage(error.failure_summary, 0, true)
+    : null;
 
   useEffect(() => {
     const webview = getCurrentWebview();
@@ -256,10 +294,8 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
                         {result.zip_path}
                       </p>
                     </div>
-                    {downloadWarning && (
-                      <p className="mt-3 text-xs text-amber-700">
-                        {downloadWarning}
-                      </p>
+                    {downloadMessage && (
+                      <DownloadFailureDetails message={downloadMessage} />
                     )}
                     <Button
                       onClick={() => revealItemInDir(result.zip_path)}
@@ -285,7 +321,19 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
           {/* Error Display */}
           {error && (
             <Card data-testid="error-card" className="bg-destructive/10 p-4 text-center">
-              <p data-testid="error-message" className="font-medium text-destructive">{error}</p>
+              {errorDownloadMessage ? (
+                <DownloadFailureDetails
+                  message={errorDownloadMessage}
+                  tone="error"
+                />
+              ) : (
+                <p
+                  data-testid="error-message"
+                  className="font-medium text-destructive"
+                >
+                  {error.message}
+                </p>
+              )}
             </Card>
           )}
         </div>

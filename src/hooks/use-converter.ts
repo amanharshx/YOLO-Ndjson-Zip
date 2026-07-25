@@ -1,7 +1,13 @@
 import { useState, useEffect } from "react";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { ProgressEvent, ConvertResult, Format } from "@/lib/types";
+import { toConvertError } from "@/lib/download-failures";
+import type {
+  ProgressEvent,
+  ConvertError,
+  ConvertResult,
+  Format,
+} from "@/lib/types";
 
 export function useConverter() {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -11,7 +17,7 @@ export function useConverter() {
   const [isConverting, setIsConverting] = useState(false);
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
   const [result, setResult] = useState<ConvertResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ConvertError | null>(null);
   const [startTime, setStartTime] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
@@ -96,7 +102,7 @@ export function useConverter() {
 
       setResult(convertResult);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toConvertError(e));
     } finally {
       setIsConverting(false);
     }

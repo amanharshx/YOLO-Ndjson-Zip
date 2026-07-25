@@ -3,7 +3,7 @@ mod downloader;
 mod parser;
 
 use converter::get_converter;
-use downloader::{DownloadResult, Downloader, ProgressEvent};
+use downloader::{DownloadResult, Downloader, FailureSummary, ProgressEvent};
 use parser::{normalize_split, parse_ndjson, ImageEntry, NDJSONData, ParseError};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -25,6 +25,41 @@ pub struct ConvertResult {
     pub failed_downloads: usize,
     pub omitted_images: usize,
     pub expired_url_failures: usize,
+    pub failure_summary: FailureSummary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConvertErrorKind {
+    ConversionFailed,
+    DownloadFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConvertError {
+    pub kind: ConvertErrorKind,
+    pub message: String,
+    pub failure_summary: Option<FailureSummary>,
+}
+
+impl ConvertError {
+    fn download_failed(failure_summary: &FailureSummary) -> Self {
+        Self {
+            kind: ConvertErrorKind::DownloadFailed,
+            message: "Images could not be downloaded.".to_string(),
+            failure_summary: Some(failure_summary.clone()),
+        }
+    }
+}
+
+impl From<String> for ConvertError {
+    fn from(message: String) -> Self {
+        Self {
+            kind: ConvertErrorKind::ConversionFailed,
+            message,
+            failure_summary: None,
+        }
+    }
 }
 
 fn normalize_zip_path(path: &str) -> Result<String, String> {
@@ -227,27 +262,14 @@ fn validate_downloaded_image_count(
     include_images: bool,
     original_image_count: usize,
     kept_image_count: usize,
-    download_total: u32,
-    expired_url_failures: usize,
-) -> Result<(), String> {
+    _download_total: u32,
+    failure_summary: &FailureSummary,
+) -> Result<(), ConvertError> {
     if !include_images || original_image_count == 0 || kept_image_count > 0 {
         return Ok(());
     }
 
-    if download_total == 0 {
-        return Err(
-            "No image URLs were found in this export. Re-export the dataset and try again."
-                .to_string(),
-        );
-    }
-
-    let mut message =
-        "All image downloads failed. Check your network or CDN access and try again.".to_string();
-    if expired_url_failures > 0 {
-        message
-            .push_str(" Some signed URLs may have expired; re-export the dataset and try again.");
-    }
-    Err(message)
+    Err(ConvertError::download_failed(failure_summary))
 }
 
 #[tauri::command]
@@ -257,7 +279,7 @@ async fn convert_ndjson(
     output_path: String,
     include_images: bool,
     channel: Channel<ProgressEvent>,
-) -> Result<ConvertResult, String> {
+) -> Result<ConvertResult, ConvertError> {
     let metadata = std::fs::metadata(&file_path)
         .map_err(|e| format!("Failed to inspect file '{}': {}", file_path, e))?;
     if !is_ndjson_size_allowed(metadata.len()) {
@@ -265,7 +287,8 @@ async fn convert_ndjson(
             "NDJSON file is too large ({} bytes). Maximum allowed is {} bytes.",
             metadata.len(),
             MAX_NDJSON_BYTES
-        ));
+        )
+        .into());
     }
 
     // Read the NDJSON file
@@ -303,7 +326,8 @@ async fn convert_ndjson(
             "The '{}' format does not support semantic segmentation datasets. \
              Use YOLO, COCO, or Pascal VOC.",
             format
-        ));
+        )
+        .into());
     }
 
     // Semantic datasets carry polygon segments. PNG-mask-origin exports arrive
@@ -312,7 +336,8 @@ async fn convert_ndjson(
     if semantic_dataset_has_no_polygons(&data) {
         return Err("Semantic dataset has no polygon segments in any image. \
              PNG-mask exports are not supported; provide polygon annotations."
-            .to_string());
+            .to_string()
+            .into());
     }
 
     // Download images if requested
@@ -326,12 +351,14 @@ async fn convert_ndjson(
             total: 0,
             failed: 0,
             expired_url_failures: 0,
+            failure_summary: Default::default(),
         }
     };
 
     let download_total = download_result.total;
     let failed_downloads = download_result.failed;
     let expired_url_failures = download_result.expired_url_failures;
+    let failure_summary = download_result.failure_summary.clone();
     let omitted_images =
         filter_images_without_downloads(&mut data, &download_result.files, include_images);
     let kept_image_count = data.images.len();
@@ -340,7 +367,7 @@ async fn convert_ndjson(
         original_image_count,
         kept_image_count,
         download_total,
-        expired_url_failures,
+        &failure_summary,
     )?;
     let image_count = download_result.files.len();
 
@@ -419,7 +446,7 @@ async fn convert_ndjson(
 
     if let Err(err) = zip_result {
         let _ = std::fs::remove_file(&output_path);
-        return Err(err);
+        return Err(err.into());
     }
 
     channel
@@ -439,6 +466,7 @@ async fn convert_ndjson(
         failed_downloads,
         omitted_images,
         expired_url_failures,
+        failure_summary,
     })
 }
 
@@ -460,9 +488,10 @@ mod tests {
         file_name_with_suffix, filter_images_without_downloads, is_ndjson_size_allowed,
         normalize_zip_path, prepare_images_with_unique_output_names,
         semantic_dataset_has_no_polygons, semantic_format_supported, short_stable_hash,
-        validate_downloaded_image_count, validate_pose_dataset, MAX_NDJSON_BYTES,
+        validate_downloaded_image_count, validate_pose_dataset, ConvertErrorKind, MAX_NDJSON_BYTES,
     };
     use crate::converter::get_converter;
+    use crate::downloader::{FailureGroup, FailureKind, FailureSummary};
     use crate::parser::{image_entry_download_key, parse_ndjson};
     use std::collections::HashMap;
 
@@ -530,37 +559,49 @@ mod tests {
 
     #[test]
     fn all_missing_images_fail_even_when_no_download_was_attempted() {
-        let error = validate_downloaded_image_count(true, 2, 0, 0, 0).unwrap_err();
+        let summary = failure_summary(FailureKind::MissingUrl, 2);
+        let error = validate_downloaded_image_count(true, 2, 0, 0, &summary).unwrap_err();
 
-        assert_eq!(
-            error,
-            "No image URLs were found in this export. Re-export the dataset and try again."
-        );
+        assert_eq!(error.kind, ConvertErrorKind::DownloadFailed);
+        assert_eq!(error.failure_summary, Some(summary));
+        assert_eq!(error.message, "Images could not be downloaded.");
     }
 
     #[test]
-    fn all_network_failures_return_generic_retry_message() {
-        let error = validate_downloaded_image_count(true, 2, 0, 2, 0).unwrap_err();
+    fn all_network_failures_return_structured_summary() {
+        let summary = failure_summary(FailureKind::Connect, 2);
+        let error = validate_downloaded_image_count(true, 2, 0, 2, &summary).unwrap_err();
 
-        assert_eq!(
-            error,
-            "All image downloads failed. Check your network or CDN access and try again."
-        );
-        assert!(!error.contains("signed URLs"));
+        assert_eq!(error.kind, ConvertErrorKind::DownloadFailed);
+        assert_eq!(error.failure_summary, Some(summary));
     }
 
     #[test]
-    fn all_expired_urls_include_reexport_hint() {
-        let error = validate_downloaded_image_count(true, 2, 0, 2, 2).unwrap_err();
+    fn all_expired_urls_return_structured_summary() {
+        let summary = failure_summary(FailureKind::ExpiredUrl, 2);
+        let error = validate_downloaded_image_count(true, 2, 0, 2, &summary).unwrap_err();
 
-        assert!(error.contains("signed URLs may have expired"));
-        assert!(error.contains("re-export"));
+        assert_eq!(error.kind, ConvertErrorKind::DownloadFailed);
+        assert_eq!(error.failure_summary, Some(summary));
+    }
+
+    fn failure_summary(kind: FailureKind, count: usize) -> FailureSummary {
+        FailureSummary {
+            groups: vec![FailureGroup {
+                kind,
+                count,
+                examples: vec!["example.jpg".to_string()],
+                http_statuses: Vec::new(),
+            }],
+            expiry: None,
+        }
     }
 
     #[test]
     fn zero_image_and_labels_only_datasets_do_not_fail_download_validation() {
-        assert!(validate_downloaded_image_count(true, 0, 0, 0, 0).is_ok());
-        assert!(validate_downloaded_image_count(false, 2, 0, 0, 0).is_ok());
+        let summary = FailureSummary::default();
+        assert!(validate_downloaded_image_count(true, 0, 0, 0, &summary).is_ok());
+        assert!(validate_downloaded_image_count(false, 2, 0, 0, &summary).is_ok());
     }
 
     #[test]

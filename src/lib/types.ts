@@ -7,6 +7,51 @@ export interface ProgressEvent {
   item: string | null;
 }
 
+export type FailureKind =
+  | "missing_url"
+  | "expired_url"
+  | "access_denied"
+  | "not_found"
+  | "timeout"
+  | "connect"
+  | "dns"
+  | "blocked_address"
+  | "malformed_url"
+  | "unsupported_scheme"
+  | "server_error"
+  | "response_error"
+  | "too_large"
+  | "size_overflow"
+  | "http_error"
+  | "download_error";
+
+export interface FailureGroup {
+  kind: FailureKind;
+  count: number;
+  examples: string[];
+  http_statuses: number[];
+}
+
+export interface ExpirySummary {
+  urls_with_expiry: number;
+  expired_urls: number;
+  all_expired: boolean;
+  latest_expired_at: number | null;
+}
+
+export interface FailureSummary {
+  groups: FailureGroup[];
+  expiry: ExpirySummary | null;
+}
+
+export type ConvertErrorKind = "conversion_failed" | "download_failed";
+
+export interface ConvertError {
+  kind: ConvertErrorKind;
+  message: string;
+  failure_summary: FailureSummary | null;
+}
+
 export interface ConvertResult {
   zip_path: string;
   file_count: number;
@@ -15,6 +60,7 @@ export interface ConvertResult {
   failed_downloads: number;
   omitted_images: number;
   expired_url_failures: number;
+  failure_summary: FailureSummary;
 }
 
 export interface Format {
