@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ConverterScreen,
   DownloadFailureDetails,
@@ -18,6 +18,10 @@ vi.mock("@tauri-apps/api/webview", () => ({
     onDragDropEvent: vi.fn().mockResolvedValue(() => {}),
   }),
 }));
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const completeResult: ConvertResult = {
   zip_path: "/tmp/dataset.zip",
@@ -65,7 +69,8 @@ describe("getDownloadMessage", () => {
 });
 
 describe("DownloadFailureDetails", () => {
-  it("renders one collapsed disclosure and copies diagnostics", () => {
+  it("announces copied diagnostics and resets after two seconds", async () => {
+    vi.useFakeTimers();
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -87,10 +92,74 @@ describe("DownloadFailureDetails", () => {
 
     expect(screen.getByText("Download details")).toBeInTheDocument();
     expect(screen.getByText("1 download link expired — one.jpg")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Copy details" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy details" }));
+      await Promise.resolve();
+    });
     expect(writeText).toHaveBeenCalledWith(
       "expired_url: 1; one.jpg\nnot_found: 1; HTTP 404; two.jpg",
     );
+    expect(screen.getByRole("status")).toHaveTextContent("Copied");
+
+    act(() => {
+      vi.advanceTimersByTime(2_000);
+    });
+
+    expect(screen.queryByText("Copied")).not.toBeInTheDocument();
+  });
+
+  it("clears copied reset timer on unmount", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+    });
+    const clearTimeoutSpy = vi.spyOn(window, "clearTimeout");
+    const { unmount } = render(
+      <DownloadFailureDetails
+        message={{
+          primary: "1 image was skipped.",
+          breakdown: ["1 download failed. Try again."],
+          diagnostics: "download_error: 1",
+        }}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy details" }));
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Copied");
+
+    unmount();
+
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+    clearTimeoutSpy.mockRestore();
+  });
+
+  it("reports clipboard failures", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: vi.fn().mockRejectedValue(new Error("denied")),
+      },
+    });
+
+    render(
+      <DownloadFailureDetails
+        message={{
+          primary: "1 image was skipped.",
+          breakdown: ["1 download failed. Try again."],
+          diagnostics: "download_error: 1",
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy details" }));
+
+    expect(
+      await screen.findByText("Couldn't copy details"),
+    ).toBeInTheDocument();
   });
 
   it("renders structured hard failures through the error card", () => {
@@ -135,7 +204,7 @@ describe("DownloadFailureDetails", () => {
 
     render(<ConverterScreen onBack={vi.fn()} />);
 
-    expect(screen.getByTestId("error-card")).toHaveTextContent(
+    expect(screen.getByTestId("error-message")).toHaveTextContent(
       "Your download links expired on 19 Jul 2026.",
     );
     expect(screen.getByText("Download details")).toBeInTheDocument();
