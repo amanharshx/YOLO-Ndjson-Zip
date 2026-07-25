@@ -224,20 +224,6 @@ function causeSentence(
   }
 }
 
-function dominantGroup(groups: FailureGroup[]): FailureGroup | null {
-  let dominant: FailureGroup | null = null;
-  let tied = false;
-  for (const group of groups) {
-    if (!dominant || group.count > dominant.count) {
-      dominant = group;
-      tied = false;
-    } else if (group.count === dominant.count) {
-      tied = true;
-    }
-  }
-  return tied ? null : dominant;
-}
-
 function formatExpiryDate(timestamp: number): string | null {
   const date = new Date(timestamp * 1000);
   if (Number.isNaN(date.getTime())) {
@@ -265,7 +251,7 @@ export function buildDownloadFailureMessage(
   const allReachabilityFailures =
     groups.length > 0 &&
     groups.every((group) => group.kind === "connect" || group.kind === "dns");
-  const dominant = dominantGroup(groups);
+  const singleGroup = groups.length === 1 ? groups[0] : null;
   const expiryDate =
     summary.expiry?.latest_expired_at == null
       ? null
@@ -276,8 +262,8 @@ export function buildDownloadFailureMessage(
       : causeSentence("expired_url", summary.expiry.expired_urls, hardFailure)
     : allReachabilityFailures
       ? "Couldn't connect to the image server. Check your internet connection and try again."
-      : groups.length === 1 && dominant
-        ? causeSentence(dominant.kind, dominant.count, hardFailure)
+      : singleGroup
+        ? causeSentence(singleGroup.kind, singleGroup.count, hardFailure)
         : null;
   const genericCount = skippedImages || total;
   const generic = hardFailure

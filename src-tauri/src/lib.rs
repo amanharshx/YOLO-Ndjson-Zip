@@ -262,7 +262,6 @@ fn validate_downloaded_image_count(
     include_images: bool,
     original_image_count: usize,
     kept_image_count: usize,
-    _download_total: u32,
     failure_summary: &FailureSummary,
 ) -> Result<(), ConvertError> {
     if !include_images || original_image_count == 0 || kept_image_count > 0 {
@@ -366,7 +365,6 @@ async fn convert_ndjson(
         include_images,
         original_image_count,
         kept_image_count,
-        download_total,
         &failure_summary,
     )?;
     let image_count = download_result.files.len();
@@ -560,7 +558,7 @@ mod tests {
     #[test]
     fn all_missing_images_fail_even_when_no_download_was_attempted() {
         let summary = failure_summary(FailureKind::MissingUrl, 2);
-        let error = validate_downloaded_image_count(true, 2, 0, 0, &summary).unwrap_err();
+        let error = validate_downloaded_image_count(true, 2, 0, &summary).unwrap_err();
 
         assert_eq!(error.kind, ConvertErrorKind::DownloadFailed);
         assert_eq!(error.failure_summary, Some(summary));
@@ -570,7 +568,7 @@ mod tests {
     #[test]
     fn all_network_failures_return_structured_summary() {
         let summary = failure_summary(FailureKind::Connect, 2);
-        let error = validate_downloaded_image_count(true, 2, 0, 2, &summary).unwrap_err();
+        let error = validate_downloaded_image_count(true, 2, 0, &summary).unwrap_err();
 
         assert_eq!(error.kind, ConvertErrorKind::DownloadFailed);
         assert_eq!(error.failure_summary, Some(summary));
@@ -579,7 +577,7 @@ mod tests {
     #[test]
     fn all_expired_urls_return_structured_summary() {
         let summary = failure_summary(FailureKind::ExpiredUrl, 2);
-        let error = validate_downloaded_image_count(true, 2, 0, 2, &summary).unwrap_err();
+        let error = validate_downloaded_image_count(true, 2, 0, &summary).unwrap_err();
 
         assert_eq!(error.kind, ConvertErrorKind::DownloadFailed);
         assert_eq!(error.failure_summary, Some(summary));
@@ -600,8 +598,8 @@ mod tests {
     #[test]
     fn zero_image_and_labels_only_datasets_do_not_fail_download_validation() {
         let summary = FailureSummary::default();
-        assert!(validate_downloaded_image_count(true, 0, 0, 0, &summary).is_ok());
-        assert!(validate_downloaded_image_count(false, 2, 0, 0, &summary).is_ok());
+        assert!(validate_downloaded_image_count(true, 0, 0, &summary).is_ok());
+        assert!(validate_downloaded_image_count(false, 2, 0, &summary).is_ok());
     }
 
     #[test]

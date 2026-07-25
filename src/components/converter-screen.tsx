@@ -42,10 +42,47 @@ export function DownloadFailureDetails({
 }) {
   const color =
     tone === "error" ? "text-destructive" : "text-amber-700";
+  const [copyStatus, setCopyStatus] = useState<
+    "idle" | "copied" | "failed"
+  >("idle");
+
+  useEffect(() => {
+    if (copyStatus !== "copied") {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setCopyStatus("idle");
+    }, 2_000);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [copyStatus]);
+
+  const copyDetails = async () => {
+    setCopyStatus("idle");
+    if (!navigator.clipboard?.writeText) {
+      setCopyStatus("failed");
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(message.diagnostics);
+      setCopyStatus("copied");
+    } catch {
+      setCopyStatus("failed");
+    }
+  };
 
   return (
     <div className={`mt-3 text-left text-xs ${color}`}>
-      <p className="font-medium">{message.primary}</p>
+      <p
+        data-testid={tone === "error" ? "error-message" : undefined}
+        className="font-medium"
+      >
+        {message.primary}
+      </p>
       {message.breakdown.length > 0 && (
         <details className="mt-2">
           <summary className="cursor-pointer font-medium">
@@ -60,11 +97,16 @@ export function DownloadFailureDetails({
             type="button"
             className="mt-2 underline underline-offset-2"
             onClick={() => {
-              void navigator.clipboard?.writeText(message.diagnostics);
+              void copyDetails();
             }}
           >
             Copy details
           </button>
+          {copyStatus !== "idle" && (
+            <span className="ml-2" role="status">
+              {copyStatus === "copied" ? "Copied" : "Couldn't copy details"}
+            </span>
+          )}
         </details>
       )}
     </div>
