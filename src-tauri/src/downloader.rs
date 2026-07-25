@@ -1185,4 +1185,33 @@ mod tests {
             .is_err());
     }
 
+    #[tokio::test]
+    async fn partial_expiry_continues_processing_nonexpired_urls() {
+        let expired = Utc::now().timestamp() - CLOCK_SKEW_TOLERANCE_SECS - 1;
+        let active = Utc::now().timestamp() + CLOCK_SKEW_TOLERANCE_SECS + 1;
+        let content = format!(
+            r#"{{"type":"dataset","class_names":{{}}}}
+{{"type":"image","file":"expired.jpg","width":1,"height":1,"split":"train","url":"https://example.com/expired.jpg?Expires={expired}"}}
+{{"type":"image","file":"active.jpg","width":1,"height":1,"split":"train","url":"http://127.0.0.1/active.jpg?Expires={active}"}}"#
+        );
+        let data = crate::parser::parse_ndjson(&content).unwrap();
+        let channel = Channel::new(|_| Ok(()));
+
+        let result = Downloader::new(1)
+            .unwrap()
+            .download_all(&data.images, &channel)
+            .await;
+
+        assert_eq!(result.failure_summary.groups.len(), 2);
+        assert_eq!(
+            result.failure_summary.groups[0].kind,
+            FailureKind::ExpiredUrl
+        );
+        assert_eq!(
+            result.failure_summary.groups[1].kind,
+            FailureKind::BlockedAddress
+        );
+        let expiry = result.failure_summary.expiry.unwrap();
+        assert!(!expiry.all_expired);
+    }
 }

@@ -61,6 +61,18 @@ describe("buildDownloadFailureMessage", () => {
     );
   });
 
+  it("explains expired links during partial success", () => {
+    expect(
+      buildDownloadFailureMessage(
+        summary(["expired_url", 2, ["one.jpg", "two.jpg"]]),
+        2,
+        false,
+      )?.primary,
+    ).toBe(
+      "2 images and their corresponding annotations were skipped. The download links expired. Export the dataset again from Ultralytics Platform, then retry.",
+    );
+  });
+
   it("explains 403 without claiming expiry", () => {
     expect(
       buildDownloadFailureMessage(
