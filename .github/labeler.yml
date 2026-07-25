@@ -1,0 +1,46 @@
+# PR triage rules. These differ intentionally from CI path filters:
+# CI filters decide which checks run; these labels describe changed areas.
+
+frontend:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/**"
+          - "public/**"
+          - "index.html"
+          - "vite.config.ts"
+          - "vitest.config.ts"
+          - "tsconfig*.json"
+
+backend:
+  # Requires at least one src-tauri file beyond files changed by release bumps.
+  # Path-only matching also works for comment/manual runs without branch data.
+  - changed-files:
+      - all-globs-to-any-file:
+          - "src-tauri/**"
+          - "!src-tauri/Cargo.toml"
+          - "!src-tauri/Cargo.lock"
+          - "!src-tauri/tauri.conf.json"
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+          - "codecov.yml"
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+          - "docs/**"
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "package.json"
+          - "bun.lock"
+          - "src-tauri/Cargo.toml"
+          - "src-tauri/Cargo.lock"
+
+release:
+  - head-branch:
+      - "^release/"
