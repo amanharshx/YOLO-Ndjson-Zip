@@ -4,7 +4,7 @@ mod parser;
 
 use converter::get_converter;
 use downloader::{DownloadResult, Downloader, ProgressEvent};
-use parser::{normalize_split, parse_ndjson, ImageEntry, NDJSONData};
+use parser::{normalize_split, parse_ndjson, ImageEntry, NDJSONData, ParseError};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -157,6 +157,17 @@ fn semantic_format_supported(format: &str) -> bool {
     )
 }
 
+fn validate_pose_dataset(data: &mut NDJSONData) -> Result<(), ParseError> {
+    if data.metadata.task != "pose" {
+        return Ok(());
+    }
+
+    if let Some(shape) = data.pose_kpt_shape()? {
+        data.metadata.kpt_shape = Some(vec![shape.num_keypoints as i32, shape.dims as i32]);
+    }
+    Ok(())
+}
+
 fn prepare_images_with_unique_output_names(images: &[ImageEntry]) -> Vec<ImageEntry> {
     let mut seen_entries: HashMap<(String, String), usize> = HashMap::new();
     let mut used_names_by_split: HashMap<String, HashSet<String>> = HashMap::new();
@@ -228,6 +239,7 @@ async fn convert_ndjson(
         .ok();
 
     let mut data = parse_ndjson(&content).map_err(|e| format!("Failed to parse NDJSON: {}", e))?;
+    validate_pose_dataset(&mut data).map_err(|e| e.to_string())?;
     data.images = prepare_images_with_unique_output_names(&data.images);
 
     channel
@@ -394,7 +406,7 @@ mod tests {
     use super::{
         file_name_with_suffix, is_ndjson_size_allowed, normalize_zip_path,
         prepare_images_with_unique_output_names, semantic_dataset_has_no_polygons,
-        semantic_format_supported, short_stable_hash, MAX_NDJSON_BYTES,
+        semantic_format_supported, short_stable_hash, validate_pose_dataset, MAX_NDJSON_BYTES,
     };
     use crate::parser::parse_ndjson;
 
@@ -440,6 +452,17 @@ mod tests {
 {"type":"image","file":"a.jpg","width":512,"height":512,"split":"train","annotations":{"bboxes":[[0,0.5,0.5,0.2,0.2]]}}"#;
         let data = parse_ndjson(content).unwrap();
         assert!(!semantic_dataset_has_no_polygons(&data));
+    }
+
+    #[test]
+    fn pose_validation_writes_inferred_shape_into_metadata() {
+        let content = r#"{"type":"dataset","task":"pose","name":"pose","class_names":{"0":"object"}}
+{"type":"image","file":"pose.jpg","width":640,"height":480,"split":"train","annotations":{"pose":[[0,0.5,0.5,0.4,0.4,0.1,0.2,2,0.3,0.4,2]]}}"#;
+        let mut data = parse_ndjson(content).unwrap();
+
+        validate_pose_dataset(&mut data).unwrap();
+
+        assert_eq!(data.metadata.kpt_shape, Some(vec![2, 3]));
     }
 
     #[test]
