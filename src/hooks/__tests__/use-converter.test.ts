@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
+import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import { useConverter } from "../use-converter";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -66,5 +68,46 @@ describe("useConverter", () => {
 
     // With no progress or elapsed time, should return "0.0"
     expect(result.current.getDownloadRate()).toBe("0.0");
+  });
+
+  it("preserves structured conversion errors", async () => {
+    const failureSummary = {
+      groups: [
+        {
+          kind: "expired_url" as const,
+          count: 1,
+          examples: ["one.jpg"],
+          http_statuses: [],
+        },
+      ],
+      expiry: null,
+    };
+    vi.mocked(save).mockResolvedValue("/tmp/output.zip");
+    vi.mocked(invoke).mockRejectedValue({
+      kind: "download_failed",
+      message: "Images could not be downloaded.",
+      failure_summary: failureSummary,
+    });
+    const { result } = renderHook(() => useConverter());
+
+    act(() => {
+      result.current.setFileFromPath("/tmp/dataset.ndjson");
+      result.current.setSelectedFormat({
+        id: "yolo",
+        name: "YOLO",
+        available: true,
+        desc: "",
+        highlight: "",
+      });
+    });
+    await act(async () => {
+      await result.current.handleConvert();
+    });
+
+    expect(result.current.error).toEqual({
+      kind: "download_failed",
+      message: "Images could not be downloaded.",
+      failure_summary: failureSummary,
+    });
   });
 });
