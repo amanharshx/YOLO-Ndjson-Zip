@@ -23,6 +23,8 @@ pub struct ConvertResult {
     pub image_count: usize,
     pub download_total: u32,
     pub failed_downloads: usize,
+    pub omitted_images: usize,
+    pub expired_url_failures: usize,
 }
 
 fn normalize_zip_path(path: &str) -> Result<String, String> {
@@ -206,6 +208,48 @@ fn prepare_images_with_unique_output_names(images: &[ImageEntry]) -> Vec<ImageEn
     prepared_images
 }
 
+fn filter_images_without_downloads(
+    data: &mut NDJSONData,
+    downloaded_images: &HashMap<String, Vec<u8>>,
+    include_images: bool,
+) -> usize {
+    if !include_images {
+        return 0;
+    }
+
+    let original_image_count = data.images.len();
+    data.images
+        .retain(|image| downloaded_images.contains_key(&parser::image_entry_download_key(image)));
+    original_image_count - data.images.len()
+}
+
+fn validate_downloaded_image_count(
+    include_images: bool,
+    original_image_count: usize,
+    kept_image_count: usize,
+    download_total: u32,
+    expired_url_failures: usize,
+) -> Result<(), String> {
+    if !include_images || original_image_count == 0 || kept_image_count > 0 {
+        return Ok(());
+    }
+
+    if download_total == 0 {
+        return Err(
+            "No image URLs were found in this export. Re-export the dataset and try again."
+                .to_string(),
+        );
+    }
+
+    let mut message =
+        "All image downloads failed. Check your network or CDN access and try again.".to_string();
+    if expired_url_failures > 0 {
+        message
+            .push_str(" Some signed URLs may have expired; re-export the dataset and try again.");
+    }
+    Err(message)
+}
+
 #[tauri::command]
 async fn convert_ndjson(
     file_path: String,
@@ -241,6 +285,7 @@ async fn convert_ndjson(
     let mut data = parse_ndjson(&content).map_err(|e| format!("Failed to parse NDJSON: {}", e))?;
     validate_pose_dataset(&mut data).map_err(|e| e.to_string())?;
     data.images = prepare_images_with_unique_output_names(&data.images);
+    let original_image_count = data.images.len();
 
     channel
         .send(ProgressEvent {
@@ -280,18 +325,24 @@ async fn convert_ndjson(
             files: std::collections::HashMap::new(),
             total: 0,
             failed: 0,
+            expired_url_failures: 0,
         }
     };
 
-    let image_count = download_result.files.len();
     let download_total = download_result.total;
     let failed_downloads = download_result.failed;
-    if include_images && download_total > 0 && image_count == 0 {
-        return Err(
-            "All image downloads failed. Check your network or CDN access and try again."
-                .to_string(),
-        );
-    }
+    let expired_url_failures = download_result.expired_url_failures;
+    let omitted_images =
+        filter_images_without_downloads(&mut data, &download_result.files, include_images);
+    let kept_image_count = data.images.len();
+    validate_downloaded_image_count(
+        include_images,
+        original_image_count,
+        kept_image_count,
+        download_total,
+        expired_url_failures,
+    )?;
+    let image_count = download_result.files.len();
 
     // Get converter
     let converter = get_converter(&format).ok_or_else(|| format!("Unknown format: {}", format))?;
@@ -386,6 +437,8 @@ async fn convert_ndjson(
         image_count,
         download_total,
         failed_downloads,
+        omitted_images,
+        expired_url_failures,
     })
 }
 
@@ -404,11 +457,111 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        file_name_with_suffix, is_ndjson_size_allowed, normalize_zip_path,
-        prepare_images_with_unique_output_names, semantic_dataset_has_no_polygons,
-        semantic_format_supported, short_stable_hash, validate_pose_dataset, MAX_NDJSON_BYTES,
+        file_name_with_suffix, filter_images_without_downloads, is_ndjson_size_allowed,
+        normalize_zip_path, prepare_images_with_unique_output_names,
+        semantic_dataset_has_no_polygons, semantic_format_supported, short_stable_hash,
+        validate_downloaded_image_count, validate_pose_dataset, MAX_NDJSON_BYTES,
     };
-    use crate::parser::parse_ndjson;
+    use crate::converter::get_converter;
+    use crate::parser::{image_entry_download_key, parse_ndjson};
+    use std::collections::HashMap;
+
+    fn partial_download_data() -> crate::parser::NDJSONData {
+        parse_ndjson(
+            r#"{"type":"dataset","task":"detect","name":"partial","class_names":{"0":"cat"}}
+{"type":"image","file":"present.jpg","width":640,"height":480,"split":"train","url":"https://cdn.example/present.jpg","annotations":{"boxes":[[0,0.5,0.5,0.2,0.2]]}}
+{"type":"image","file":"missing.jpg","width":640,"height":480,"split":"train","url":"","annotations":{"boxes":[[0,0.5,0.5,0.2,0.2]]}}"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn filtering_keeps_only_records_with_downloaded_bytes() {
+        let mut data = partial_download_data();
+        let mut downloaded = HashMap::new();
+        downloaded.insert(
+            image_entry_download_key(&data.images[0]),
+            b"present-image".to_vec(),
+        );
+
+        let omitted = filter_images_without_downloads(&mut data, &downloaded, true);
+
+        assert_eq!(omitted, 1);
+        assert_eq!(data.images.len(), 1);
+        assert_eq!(data.images[0].file, "present.jpg");
+    }
+
+    #[test]
+    fn filtering_is_disabled_for_labels_only_conversion() {
+        let mut data = partial_download_data();
+
+        let omitted = filter_images_without_downloads(&mut data, &HashMap::new(), false);
+
+        assert_eq!(omitted, 0);
+        assert_eq!(data.images.len(), 2);
+    }
+
+    #[test]
+    fn filtered_records_are_absent_from_every_converter_output() {
+        let mut data = partial_download_data();
+        let mut downloaded = HashMap::new();
+        downloaded.insert(
+            image_entry_download_key(&data.images[0]),
+            b"present-image".to_vec(),
+        );
+        filter_images_without_downloads(&mut data, &downloaded, true);
+
+        for format in ["yolo", "yolo_darknet", "coco", "pascal_voc", "createml"] {
+            let files = get_converter(format).unwrap().convert(&data, &downloaded);
+            assert!(
+                files.keys().all(|path| !path.contains("missing")),
+                "{format} emitted path for missing image"
+            );
+            assert!(
+                files.values().all(|content| {
+                    std::str::from_utf8(content)
+                        .map(|text| !text.contains("missing.jpg"))
+                        .unwrap_or(true)
+                }),
+                "{format} emitted annotation for missing image"
+            );
+        }
+    }
+
+    #[test]
+    fn all_missing_images_fail_even_when_no_download_was_attempted() {
+        let error = validate_downloaded_image_count(true, 2, 0, 0, 0).unwrap_err();
+
+        assert_eq!(
+            error,
+            "No image URLs were found in this export. Re-export the dataset and try again."
+        );
+    }
+
+    #[test]
+    fn all_network_failures_return_generic_retry_message() {
+        let error = validate_downloaded_image_count(true, 2, 0, 2, 0).unwrap_err();
+
+        assert_eq!(
+            error,
+            "All image downloads failed. Check your network or CDN access and try again."
+        );
+        assert!(!error.contains("signed URLs"));
+    }
+
+    #[test]
+    fn all_expired_urls_include_reexport_hint() {
+        let error = validate_downloaded_image_count(true, 2, 0, 2, 2).unwrap_err();
+
+        assert!(error.contains("signed URLs may have expired"));
+        assert!(error.contains("re-export"));
+    }
+
+    #[test]
+    fn zero_image_and_labels_only_datasets_do_not_fail_download_validation() {
+        assert!(validate_downloaded_image_count(true, 0, 0, 0, 0).is_ok());
+        assert!(validate_downloaded_image_count(false, 2, 0, 0, 0).is_ok());
+    }
 
     #[test]
     fn semantic_format_supported_allows_polygon_formats() {
