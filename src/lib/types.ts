@@ -13,6 +13,8 @@ export interface ConvertResult {
   image_count: number;
   download_total: number;
   failed_downloads: number;
+  omitted_images: number;
+  expired_url_failures: number;
 }
 
 export interface Format {

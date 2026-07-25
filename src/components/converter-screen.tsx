@@ -4,7 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { formats } from "@/lib/types";
+import { formats, type ConvertResult } from "@/lib/types";
 import { useConverter } from "@/hooks/use-converter";
 import { ConverterHeader } from "@/components/converter-header";
 import { FormatButton } from "@/components/format-button";
@@ -18,6 +18,23 @@ import {
   Download,
   FolderOpen,
 } from "lucide-react";
+
+export function getDownloadWarning(result: ConvertResult): string | null {
+  if (result.omitted_images === 0) {
+    return null;
+  }
+
+  const imageNoun = result.omitted_images === 1 ? "image" : "images";
+  const annotationPronoun = result.omitted_images === 1 ? "its" : "their";
+  let warning = `${result.omitted_images} ${imageNoun} and ${annotationPronoun} corresponding annotations were omitted.`;
+
+  if (result.expired_url_failures > 0) {
+    const downloadNoun = result.expired_url_failures === 1 ? "download" : "downloads";
+    warning += ` ${result.expired_url_failures} ${downloadNoun} returned HTTP 403; signed URLs may have expired. Re-export the dataset and try again.`;
+  }
+
+  return warning;
+}
 
 export function ConverterScreen({ onBack }: { onBack: () => void }) {
   const {
@@ -41,6 +58,7 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
   } = useConverter();
 
   const [isDragging, setIsDragging] = useState(false);
+  const downloadWarning = result ? getDownloadWarning(result) : null;
 
   useEffect(() => {
     const webview = getCurrentWebview();
@@ -238,11 +256,9 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
                         {result.zip_path}
                       </p>
                     </div>
-                    {result.failed_downloads > 0 && (
+                    {downloadWarning && (
                       <p className="mt-3 text-xs text-amber-700">
-                        {result.failed_downloads === result.download_total
-                          ? `All ${result.download_total} images failed to download. Check your network or CDN access.`
-                          : `${result.failed_downloads} image${result.failed_downloads === 1 ? "" : "s"} failed to download and were omitted.`}
+                        {downloadWarning}
                       </p>
                     )}
                     <Button
