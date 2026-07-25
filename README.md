@@ -177,6 +177,10 @@ The app expects newline-delimited JSON with this structure:
 {"type":"image","file":"img2.jpg","url":"https://...","width":640,"height":480,"split":"valid","annotations":{"bboxes":[[1,0.3,0.4,0.1,0.2]]}}
 ```
 
+Pose rows use `[class_id, cx, cy, width, height, keypoints...]`. Dataset records may include
+`"kpt_shape":[number_of_keypoints, 2|3]`. Add `kpt_shape` when a 2D keypoint payload length is divisible
+by both 2 and 3, such as hand-21 or dog-18, because its dimensions cannot be inferred safely.
+
 ---
 
 ## Roadmap
