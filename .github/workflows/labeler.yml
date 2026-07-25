@@ -1,0 +1,22 @@
+name: Labeler
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read # Read .github/labeler.yml via the API
+  pull-requests: write # Labels must pre-exist; issues: write intentionally omitted.
+
+jobs:
+  label:
+    name: Apply PR labels
+    # Fork PR tokens are read-only; skip them instead of failing label writes.
+    # If switching to pull_request_target, never check out or execute PR code.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/labeler@v7
+        with:
+          sync-labels: false
