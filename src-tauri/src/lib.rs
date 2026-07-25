@@ -19,12 +19,7 @@ const MAX_DOWNLOAD_CONCURRENCY: usize = 20;
 #[derive(Debug, Serialize)]
 pub struct ConvertResult {
     pub zip_path: String,
-    pub file_count: usize,
-    pub image_count: usize,
-    pub download_total: u32,
-    pub failed_downloads: usize,
     pub omitted_images: usize,
-    pub expired_url_failures: usize,
     pub failure_summary: FailureSummary,
 }
 
@@ -347,17 +342,10 @@ async fn convert_ndjson(
     } else {
         DownloadResult {
             files: std::collections::HashMap::new(),
-            total: 0,
-            failed: 0,
-            expired_url_failures: 0,
             failure_summary: Default::default(),
         }
     };
 
-    let download_total = download_result.total;
-    let failed_downloads = download_result.failed;
-    let expired_url_failures = download_result.expired_url_failures;
-    let failure_summary = download_result.failure_summary.clone();
     let omitted_images =
         filter_images_without_downloads(&mut data, &download_result.files, include_images);
     let kept_image_count = data.images.len();
@@ -365,9 +353,12 @@ async fn convert_ndjson(
         include_images,
         original_image_count,
         kept_image_count,
-        &failure_summary,
+        &download_result.failure_summary,
     )?;
-    let image_count = download_result.files.len();
+    let DownloadResult {
+        files: downloaded_images,
+        failure_summary,
+    } = download_result;
 
     // Get converter
     let converter = get_converter(&format).ok_or_else(|| format!("Unknown format: {}", format))?;
@@ -382,7 +373,7 @@ async fn convert_ndjson(
         })
         .ok();
 
-    let files = converter.convert(&data, &download_result.files);
+    let files = converter.convert(&data, &downloaded_images);
 
     channel
         .send(ProgressEvent {
@@ -458,12 +449,7 @@ async fn convert_ndjson(
 
     Ok(ConvertResult {
         zip_path: output_path.to_string_lossy().to_string(),
-        file_count: files.len(),
-        image_count,
-        download_total,
-        failed_downloads,
         omitted_images,
-        expired_url_failures,
         failure_summary,
     })
 }

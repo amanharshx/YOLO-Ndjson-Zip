@@ -1,11 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  ConverterScreen,
-  DownloadFailureDetails,
-  getDownloadMessage,
-} from "../converter-screen";
-import type { ConvertResult } from "@/lib/types";
+import { ConverterScreen, DownloadFailureDetails } from "../converter-screen";
 
 const useConverterMock = vi.hoisted(() => vi.fn());
 
@@ -21,51 +16,6 @@ vi.mock("@tauri-apps/api/webview", () => ({
 
 afterEach(() => {
   vi.useRealTimers();
-});
-
-const completeResult: ConvertResult = {
-  zip_path: "/tmp/dataset.zip",
-  file_count: 4,
-  image_count: 2,
-  download_total: 2,
-  failed_downloads: 0,
-  omitted_images: 0,
-  expired_url_failures: 0,
-  failure_summary: {
-    groups: [],
-    expiry: null,
-  },
-};
-
-describe("getDownloadMessage", () => {
-  it("returns no warning when conversion is complete", () => {
-    expect(getDownloadMessage(completeResult)).toBeNull();
-  });
-
-  it("uses skipped vocabulary and structured causes", () => {
-    expect(
-      getDownloadMessage({
-        ...completeResult,
-        download_total: 2,
-        failed_downloads: 2,
-        omitted_images: 2,
-        expired_url_failures: 2,
-        failure_summary: {
-          groups: [
-            {
-              kind: "expired_url",
-              count: 2,
-              examples: ["one.jpg", "two.jpg"],
-              http_statuses: [],
-            },
-          ],
-          expiry: null,
-        },
-      })?.primary,
-    ).toBe(
-      "2 images and their corresponding annotations were skipped. Their download links expired. Export the dataset again from Ultralytics Platform, then retry.",
-    );
-  });
 });
 
 describe("DownloadFailureDetails", () => {
@@ -184,8 +134,6 @@ describe("DownloadFailureDetails", () => {
             },
           ],
           expiry: {
-            urls_with_expiry: 1,
-            expired_urls: 1,
             all_expired: true,
             latest_expired_at: 1_784_419_200,
           },

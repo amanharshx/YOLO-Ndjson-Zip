@@ -27,19 +27,10 @@ describe("buildDownloadFailureMessage", () => {
     expect(buildDownloadFailureMessage(summary(), 0, false)).toBeNull();
   });
 
-  it("explains an all-expired hard failure", () => {
-    expect(
-      buildDownloadFailureMessage(
-        summary(["expired_url", 2, ["one.jpg", "two.jpg"]]),
-        2,
-        true,
-      ),
-    ).toMatchObject({
-      primary:
-        "Your download links have expired. Export the dataset again from Ultralytics Platform, then retry.",
-      breakdown: [
-        "2 download links expired — one.jpg, two.jpg. Export the dataset again.",
-      ],
+  it("does not reference details when no breakdown exists", () => {
+    expect(buildDownloadFailureMessage(summary(), 2, false)).toMatchObject({
+      primary: "2 images and their corresponding annotations were skipped.",
+      breakdown: [],
     });
   });
 
@@ -49,8 +40,6 @@ describe("buildDownloadFailureMessage", () => {
       ["expired_url", 1, ["expired.jpg"]],
     );
     failureSummary.expiry = {
-      urls_with_expiry: 1,
-      expired_urls: 1,
       all_expired: true,
       latest_expired_at: 1_784_419_200,
     };
@@ -156,10 +145,6 @@ describe("buildDownloadFailureMessage", () => {
     [
       "response_error" as const,
       "2 downloads stopped before finishing. Check your connection and try again.",
-    ],
-    [
-      "size_overflow" as const,
-      "2 images reported an invalid size. Export the dataset again and retry.",
     ],
     [
       "http_error" as const,

@@ -1,3 +1,4 @@
+import { FAILURE_KINDS } from "./types";
 import type {
   ConvertError,
   FailureGroup,
@@ -11,24 +12,7 @@ export interface DownloadFailureMessage {
   diagnostics: string;
 }
 
-const FAILURE_KINDS = new Set<FailureKind>([
-  "missing_url",
-  "expired_url",
-  "access_denied",
-  "not_found",
-  "timeout",
-  "connect",
-  "dns",
-  "blocked_address",
-  "malformed_url",
-  "unsupported_scheme",
-  "server_error",
-  "response_error",
-  "too_large",
-  "size_overflow",
-  "http_error",
-  "download_error",
-]);
+const FAILURE_KIND_SET: ReadonlySet<string> = new Set(FAILURE_KINDS);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -38,7 +22,7 @@ function isFailureGroup(value: unknown): value is FailureGroup {
   return (
     isRecord(value) &&
     typeof value.kind === "string" &&
-    FAILURE_KINDS.has(value.kind as FailureKind) &&
+    FAILURE_KIND_SET.has(value.kind) &&
     typeof value.count === "number" &&
     Number.isSafeInteger(value.count) &&
     value.count >= 0 &&
@@ -58,15 +42,13 @@ function isFailureSummary(value: unknown): value is FailureSummary {
     value.groups.every(isFailureGroup) &&
     (value.expiry === null ||
       (isRecord(value.expiry) &&
-        typeof value.expiry.urls_with_expiry === "number" &&
-        typeof value.expiry.expired_urls === "number" &&
         typeof value.expiry.all_expired === "boolean" &&
         (value.expiry.latest_expired_at === null ||
           typeof value.expiry.latest_expired_at === "number")))
   );
 }
 
-export function isConvertError(value: unknown): value is ConvertError {
+function isConvertError(value: unknown): value is ConvertError {
   return (
     isRecord(value) &&
     (value.kind === "conversion_failed" || value.kind === "download_failed") &&
@@ -99,6 +81,7 @@ function plural(count: number, singular: string, pluralForm = `${singular}s`) {
 }
 
 function safeExample(value: string): string {
+  // Re-sanitize IPC data here so a backend regression cannot expose signed URLs.
   const basename = value.replace(/\\/g, "/").split("/").pop() || "unknown file";
   return basename.split(/[?#]/, 1)[0] || "unknown file";
 }
@@ -127,15 +110,12 @@ function breakdownLabel(group: FailureGroup): string {
     case "unsupported_scheme":
       return `${count} download ${plural(count, "link")} used an unsupported format`;
     case "server_error":
+    case "http_error":
       return `${count} image server ${plural(count, "error")}`;
     case "response_error":
       return `${count} incomplete ${plural(count, "download")}`;
     case "too_large":
       return `${count} ${plural(count, "image")} exceeded 50 MB`;
-    case "size_overflow":
-      return `${count} ${plural(count, "image")} had an invalid size`;
-    case "http_error":
-      return `${count} image server ${plural(count, "error")}`;
     case "download_error":
       return `${count} ${plural(count, "download")} failed`;
   }
@@ -149,7 +129,6 @@ function breakdownRemedy(kind: FailureKind): string {
     case "malformed_url":
     case "unsupported_scheme":
     case "not_found":
-    case "size_overflow":
       return "Export the dataset again.";
     case "timeout":
     case "connect":
@@ -185,13 +164,10 @@ function skippedSentence(count: number): string {
 function causeSentence(
   kind: FailureKind,
   count: number,
-  hardFailure: boolean,
 ): string | null {
   switch (kind) {
     case "expired_url":
-      return hardFailure
-        ? "Your download links have expired. Export the dataset again from Ultralytics Platform, then retry."
-        : "Their download links expired. Export the dataset again from Ultralytics Platform, then retry.";
+      return "The download links expired. Export the dataset again from Ultralytics Platform, then retry.";
     case "access_denied":
       return `${count} ${plural(count, "image")} could not be downloaded because ${count === 1 ? "its link" : "their links"} expired or access was denied. Export the dataset again.`;
     case "blocked_address":
@@ -212,8 +188,6 @@ function causeSentence(
       return `${count} download ${plural(count, "link")} used an unsupported format. Export the dataset again and retry.`;
     case "response_error":
       return `${count} ${plural(count, "download")} stopped before finishing. Check your connection and try again.`;
-    case "size_overflow":
-      return `${count} ${plural(count, "image")} reported an invalid size. Export the dataset again and retry.`;
     case "http_error":
       return `The image server rejected ${count} ${plural(count, "download")}. Export the dataset again or try later.`;
     case "download_error":
@@ -256,14 +230,13 @@ export function buildDownloadFailureMessage(
     summary.expiry?.latest_expired_at == null
       ? null
       : formatExpiryDate(summary.expiry.latest_expired_at);
-  const cause = summary.expiry?.all_expired
-    ? expiryDate
+  const cause =
+    summary.expiry?.all_expired && expiryDate
       ? `Your download links expired on ${expiryDate}. Export the dataset again from Ultralytics Platform, then retry.`
-      : causeSentence("expired_url", summary.expiry.expired_urls, hardFailure)
     : allReachabilityFailures
       ? "Couldn't connect to the image server. Check your internet connection and try again."
       : singleGroup
-        ? causeSentence(singleGroup.kind, singleGroup.count, hardFailure)
+        ? causeSentence(singleGroup.kind, singleGroup.count)
         : null;
   const genericCount = skippedImages || total;
   const generic = hardFailure
@@ -273,7 +246,9 @@ export function buildDownloadFailureMessage(
     ? hardFailure
       ? cause
       : `${generic} ${cause}`
-    : `${generic} See details below for causes and next steps.`;
+    : groups.length > 0
+      ? `${generic} See details below for causes and next steps.`
+      : generic;
   const breakdown = groups.map(formatBreakdown);
   if (summary.expiry?.all_expired) {
     breakdown.push(

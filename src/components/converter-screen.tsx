@@ -4,7 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { formats, type ConvertResult } from "@/lib/types";
+import { formats } from "@/lib/types";
 import {
   buildDownloadFailureMessage,
   type DownloadFailureMessage,
@@ -22,16 +22,6 @@ import {
   Download,
   FolderOpen,
 } from "lucide-react";
-
-export function getDownloadMessage(
-  result: ConvertResult,
-): DownloadFailureMessage | null {
-  return buildDownloadFailureMessage(
-    result.failure_summary,
-    result.omitted_images,
-    false,
-  );
-}
 
 export function DownloadFailureDetails({
   message,
@@ -135,7 +125,13 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
   } = useConverter();
 
   const [isDragging, setIsDragging] = useState(false);
-  const downloadMessage = result ? getDownloadMessage(result) : null;
+  const downloadMessage = result
+    ? buildDownloadFailureMessage(
+        result.failure_summary,
+        result.omitted_images,
+        false,
+      )
+    : null;
   const errorDownloadMessage = error?.failure_summary
     ? buildDownloadFailureMessage(error.failure_summary, 0, true)
     : null;

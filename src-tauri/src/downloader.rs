@@ -34,7 +34,6 @@ pub enum FailureKind {
     ServerError,
     ResponseError,
     TooLarge,
-    SizeOverflow,
     HttpError,
     DownloadError,
 }
@@ -49,8 +48,6 @@ pub struct FailureGroup {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ExpirySummary {
-    pub urls_with_expiry: usize,
-    pub expired_urls: usize,
     pub all_expired: bool,
     pub latest_expired_at: Option<i64>,
 }
@@ -63,6 +60,7 @@ pub struct FailureSummary {
 
 impl FailureSummary {
     fn record(&mut self, kind: FailureKind, file_name: &str, http_status: Option<u16>) {
+        // Downloads finish out of order, so keep every serialized collection deterministic.
         let index = match self.groups.binary_search_by_key(&kind, |group| group.kind) {
             Ok(index) => index,
             Err(index) => {
@@ -94,17 +92,6 @@ impl FailureSummary {
                 Err(index) => group.http_statuses.insert(index, status),
             }
         }
-    }
-
-    pub fn count(&self, kind: FailureKind) -> usize {
-        self.groups
-            .iter()
-            .find(|group| group.kind == kind)
-            .map_or(0, |group| group.count)
-    }
-
-    fn expired_url_failures(&self) -> usize {
-        self.count(FailureKind::ExpiredUrl) + self.count(FailureKind::AccessDenied)
     }
 }
 
@@ -245,7 +232,7 @@ impl DownloadError {
             Self::Transport(_) => FailureKind::DownloadError,
             Self::Body(_) => FailureKind::ResponseError,
             Self::TooLarge { .. } => FailureKind::TooLarge,
-            Self::SizeOverflow => FailureKind::SizeOverflow,
+            Self::SizeOverflow => FailureKind::TooLarge,
         }
     }
 
@@ -309,22 +296,17 @@ impl Downloader {
         if total == 0 {
             return DownloadResult {
                 files: HashMap::new(),
-                total: 0,
-                failed: 0,
-                expired_url_failures: 0,
                 failure_summary,
             };
         }
 
         let now = Utc::now();
         let mut ready_downloads = Vec::with_capacity(images_with_urls.len());
-        let mut urls_with_expiry = 0usize;
         let mut expired_urls = 0usize;
         let mut latest_expired_at = None;
         for (item_label, file_name, download_key, url) in images_with_urls {
             match parse_url_expiry(&url, now) {
                 UrlExpiry::Expired(expires_at) => {
-                    urls_with_expiry += 1;
                     expired_urls += 1;
                     latest_expired_at = Some(
                         latest_expired_at
@@ -333,7 +315,6 @@ impl Downloader {
                     failure_summary.record(FailureKind::ExpiredUrl, &file_name, None);
                 }
                 UrlExpiry::Active(_) => {
-                    urls_with_expiry += 1;
                     ready_downloads.push((item_label, file_name, download_key, url));
                 }
                 UrlExpiry::Missing | UrlExpiry::Malformed => {
@@ -341,10 +322,8 @@ impl Downloader {
                 }
             }
         }
-        if urls_with_expiry > 0 {
+        if expired_urls > 0 {
             failure_summary.expiry = Some(ExpirySummary {
-                urls_with_expiry,
-                expired_urls,
                 all_expired: expired_urls == total as usize,
                 latest_expired_at: latest_expired_at.map(|value| value.timestamp()),
             });
@@ -360,16 +339,12 @@ impl Downloader {
         if ready_downloads.is_empty() {
             return DownloadResult {
                 files: HashMap::new(),
-                total,
-                failed: expired_urls,
-                expired_url_failures: failure_summary.expired_url_failures(),
                 failure_summary,
             };
         }
 
         let downloaded = Arc::new(Mutex::new(HashMap::new()));
         let counter = Arc::new(AtomicU32::new(expired_urls as u32));
-        let failed = Arc::new(AtomicU32::new(expired_urls as u32));
         let failure_summary = Arc::new(Mutex::new(failure_summary));
         let client = self.client.clone();
 
@@ -378,7 +353,6 @@ impl Downloader {
                 let client = client.clone();
                 let downloaded = Arc::clone(&downloaded);
                 let counter = Arc::clone(&counter);
-                let failed = Arc::clone(&failed);
                 let failure_summary = Arc::clone(&failure_summary);
                 let channel = channel.clone();
 
@@ -387,7 +361,6 @@ impl Downloader {
                         let kind = err.failure_kind();
                         eprintln!("Skipping download for '{}': {:?}", file_name, kind);
                         failure_summary.lock().await.record(kind, &file_name, None);
-                        failed.fetch_add(1, Ordering::SeqCst);
                         let current = counter.fetch_add(1, Ordering::SeqCst) + 1;
                         let _ = channel.send(ProgressEvent {
                             phase: "downloading".to_string(),
@@ -418,7 +391,6 @@ impl Downloader {
                                 &file_name,
                                 err.http_status(),
                             );
-                            failed.fetch_add(1, Ordering::SeqCst);
                         }
                     }
 
@@ -440,22 +412,12 @@ impl Downloader {
             Err(arc) => arc.lock().await.clone(),
         };
 
-        let failed_count = match Arc::try_unwrap(failed) {
-            Ok(counter) => counter.into_inner(),
-            Err(counter) => counter.load(Ordering::SeqCst),
-        };
-
         let failure_summary = match Arc::try_unwrap(failure_summary) {
             Ok(mutex) => mutex.into_inner(),
             Err(arc) => arc.lock().await.clone(),
         };
-        let expired_url_failure_count = failure_summary.expired_url_failures();
-
         DownloadResult {
             files,
-            total,
-            failed: failed_count as usize,
-            expired_url_failures: expired_url_failure_count,
             failure_summary,
         }
     }
@@ -463,9 +425,6 @@ impl Downloader {
 
 pub struct DownloadResult {
     pub files: HashMap<String, Vec<u8>>,
-    pub total: u32,
-    pub failed: usize,
-    pub expired_url_failures: usize,
     pub failure_summary: FailureSummary,
 }
 
@@ -951,8 +910,11 @@ mod tests {
             .download_all(&data.images, &channel)
             .await;
 
-        assert_eq!(result.failed, 1);
-        assert_eq!(result.expired_url_failures, 0);
+        assert!(result.files.is_empty());
+        assert_eq!(
+            result.failure_summary.groups[0].kind,
+            FailureKind::BlockedAddress
+        );
         assert!(timeout(Duration::from_millis(100), listener.accept())
             .await
             .is_err());
@@ -1160,7 +1122,7 @@ mod tests {
         );
         assert_eq!(
             DownloadError::SizeOverflow.failure_kind(),
-            FailureKind::SizeOverflow
+            FailureKind::TooLarge
         );
     }
 
@@ -1212,8 +1174,7 @@ mod tests {
             .download_all(&data.images, &channel)
             .await;
 
-        assert_eq!(result.failed, 1);
-        assert_eq!(result.expired_url_failures, 1);
+        assert!(result.files.is_empty());
         assert_eq!(
             result.failure_summary.groups[0].kind,
             FailureKind::ExpiredUrl
@@ -1223,4 +1184,5 @@ mod tests {
             .await
             .is_err());
     }
+
 }
