@@ -1111,6 +1111,99 @@ mod tests {
     }
 
     #[test]
+    fn parses_gcs_v4_expiry() {
+        let now = DateTime::parse_from_rfc3339("2026-02-01T19:45:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let expired_at = DateTime::parse_from_rfc3339("2026-02-01T19:40:47Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        assert_eq!(
+            parse_url_expiry(
+                "https://storage.googleapis.com/bucket/image.jpg?X-Goog-Date=20260125T194047Z&X-Goog-Expires=604800&X-Goog-Signature=secret",
+                now,
+            ),
+            UrlExpiry::Expired(expired_at)
+        );
+        assert_eq!(
+            parse_url_expiry(
+                "https://storage.googleapis.com/bucket/image.jpg?X-Goog-Expires=604800&X-Goog-Date=20260125T195000Z",
+                now,
+            ),
+            UrlExpiry::Active(
+                DateTime::parse_from_rfc3339("2026-02-01T19:50:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc)
+            )
+        );
+        assert_eq!(
+            parse_url_expiry(
+                "https://storage.googleapis.com/bucket/image.jpg?X-Goog-Date=invalid&X-Goog-Expires=604800",
+                now,
+            ),
+            UrlExpiry::Malformed
+        );
+        assert_eq!(
+            parse_url_expiry(
+                "https://storage.googleapis.com/bucket/image.jpg?X-Goog-Date=20260125T194047Z",
+                now,
+            ),
+            UrlExpiry::Malformed
+        );
+        assert_eq!(
+            parse_url_expiry(
+                "https://storage.googleapis.com/bucket/image.jpg?X-Goog-Date=20260125T194047Z&X-Goog-Expires=-1",
+                now,
+            ),
+            UrlExpiry::Malformed
+        );
+    }
+
+    #[test]
+    fn parses_aws_v4_expiry() {
+        let now = DateTime::parse_from_rfc3339("2013-05-25T00:03:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let expired_at = DateTime::parse_from_rfc3339("2013-05-25T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        assert_eq!(
+            parse_url_expiry(
+                "https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Date=20130524T000000Z&X-Amz-Expires=86400&X-Amz-Signature=secret",
+                now,
+            ),
+            UrlExpiry::Expired(expired_at)
+        );
+        assert_eq!(
+            parse_url_expiry(
+                "https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Expires=86400&X-Amz-Date=20130524T120000Z",
+                now,
+            ),
+            UrlExpiry::Active(
+                DateTime::parse_from_rfc3339("2013-05-25T12:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc)
+            )
+        );
+        assert_eq!(
+            parse_url_expiry(
+                "https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Date=invalid&X-Amz-Expires=86400",
+                now,
+            ),
+            UrlExpiry::Malformed
+        );
+        assert_eq!(
+            parse_url_expiry(
+                "https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Date=20130524T000000Z",
+                now,
+            ),
+            UrlExpiry::Malformed
+        );
+    }
+
+    #[test]
     fn aggregates_failures_with_safe_bounded_examples() {
         let mut summary = FailureSummary::default();
         let names = [

@@ -40,6 +40,9 @@ describe("DownloadFailureDetails", () => {
       />,
     );
 
+    const copyStatus = screen.getByRole("status");
+    expect(copyStatus).toBeEmptyDOMElement();
+    expect(copyStatus).toHaveClass("sr-only");
     expect(screen.getByText("Download details")).toBeInTheDocument();
     expect(screen.getByText("1 download link expired — one.jpg")).toBeInTheDocument();
     await act(async () => {
@@ -49,13 +52,17 @@ describe("DownloadFailureDetails", () => {
     expect(writeText).toHaveBeenCalledWith(
       "expired_url: 1; one.jpg\nnot_found: 1; HTTP 404; two.jpg",
     );
-    expect(screen.getByRole("status")).toHaveTextContent("Copied");
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+    expect(copyStatus).toHaveTextContent("Copied");
 
     act(() => {
       vi.advanceTimersByTime(2_000);
     });
 
-    expect(screen.queryByText("Copied")).not.toBeInTheDocument();
+    expect(copyStatus).toBeEmptyDOMElement();
+    expect(
+      screen.getByRole("button", { name: "Copy details" }),
+    ).toBeInTheDocument();
   });
 
   it("clears copied reset timer on unmount", async () => {
@@ -110,6 +117,9 @@ describe("DownloadFailureDetails", () => {
     expect(
       await screen.findByText("Couldn't copy details"),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Copy failed" }),
+    ).toBeInTheDocument();
   });
 
   it("renders structured hard failures through the error card", () => {
@@ -155,6 +165,7 @@ describe("DownloadFailureDetails", () => {
     expect(screen.getByTestId("error-message")).toHaveTextContent(
       "Your download links expired on 19 Jul 2026.",
     );
+    expect(screen.getByTestId("error-card")).toHaveClass("overflow-hidden");
     expect(screen.getByText("Download details")).toBeInTheDocument();
   });
 });

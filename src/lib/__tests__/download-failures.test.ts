@@ -172,6 +172,33 @@ describe("buildDownloadFailureMessage", () => {
     ).toBe(expected);
   });
 
+  it("keeps rejected-download remedies consistent", () => {
+    const message = buildDownloadFailureMessage(
+      summary(["http_error", 4, ["one.jpg", "two.jpg", "three.jpg"]]),
+      4,
+      true,
+    );
+
+    expect(message?.primary).toBe(
+      "The image server rejected 4 downloads. Export the dataset again or try later.",
+    );
+    expect(message?.breakdown).toEqual([
+      "4 downloads were rejected by the image server, including one.jpg, two.jpg, three.jpg. Export the dataset again or try later.",
+    ]);
+  });
+
+  it("marks truncated examples as non-exhaustive", () => {
+    expect(
+      buildDownloadFailureMessage(
+        summary(["expired_url", 8, ["one.jpg", "two.jpg", "three.jpg"]]),
+        8,
+        true,
+      )?.breakdown,
+    ).toEqual([
+      "8 download links expired, including one.jpg, two.jpg, three.jpg. Export the dataset again.",
+    ]);
+  });
+
   it("uses generic mixed copy and only references existing details", () => {
     const message = buildDownloadFailureMessage(
       summary(
