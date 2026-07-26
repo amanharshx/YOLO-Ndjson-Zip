@@ -118,22 +118,7 @@ enum UrlExpiry {
     Expired(DateTime<Utc>),
 }
 
-fn parse_url_expiry(url: &str, now: DateTime<Utc>) -> UrlExpiry {
-    let Ok(parsed) = Url::parse(url) else {
-        return UrlExpiry::Missing;
-    };
-    let Some(value) = parsed
-        .query_pairs()
-        .find_map(|(key, value)| (key == "Expires").then_some(value))
-    else {
-        return UrlExpiry::Missing;
-    };
-    let Ok(timestamp) = value.parse::<i64>() else {
-        return UrlExpiry::Malformed;
-    };
-    let Some(expires_at) = DateTime::from_timestamp(timestamp, 0) else {
-        return UrlExpiry::Malformed;
-    };
+fn classify_url_expiry(expires_at: DateTime<Utc>, now: DateTime<Utc>) -> UrlExpiry {
     let confidently_expired = expires_at
         .checked_add_signed(chrono::Duration::seconds(CLOCK_SKEW_TOLERANCE_SECS))
         .is_some_and(|deadline| deadline < now);
@@ -143,6 +128,72 @@ fn parse_url_expiry(url: &str, now: DateTime<Utc>) -> UrlExpiry {
     } else {
         UrlExpiry::Active(expires_at)
     }
+}
+
+fn parse_relative_url_expiry(
+    parsed: &Url,
+    date_key: &str,
+    lifetime_key: &str,
+    now: DateTime<Utc>,
+) -> UrlExpiry {
+    let signed_at = parsed
+        .query_pairs()
+        .find_map(|(key, value)| (key == date_key).then_some(value));
+    let lifetime = parsed
+        .query_pairs()
+        .find_map(|(key, value)| (key == lifetime_key).then_some(value));
+    match (signed_at, lifetime) {
+        (None, None) => UrlExpiry::Missing,
+        (Some(signed_at), Some(lifetime)) => {
+            let Ok(signed_at) = chrono::NaiveDateTime::parse_from_str(&signed_at, "%Y%m%dT%H%M%SZ")
+            else {
+                return UrlExpiry::Malformed;
+            };
+            let Ok(lifetime_seconds) = lifetime.parse::<i64>() else {
+                return UrlExpiry::Malformed;
+            };
+            if lifetime_seconds < 0 {
+                return UrlExpiry::Malformed;
+            }
+            let Some(lifetime) = chrono::Duration::try_seconds(lifetime_seconds) else {
+                return UrlExpiry::Malformed;
+            };
+            let Some(expires_at) = signed_at.and_utc().checked_add_signed(lifetime) else {
+                return UrlExpiry::Malformed;
+            };
+            classify_url_expiry(expires_at, now)
+        }
+        _ => UrlExpiry::Malformed,
+    }
+}
+
+fn parse_url_expiry(url: &str, now: DateTime<Utc>) -> UrlExpiry {
+    let Ok(parsed) = Url::parse(url) else {
+        return UrlExpiry::Missing;
+    };
+    if let Some(value) = parsed
+        .query_pairs()
+        .find_map(|(key, value)| (key == "Expires").then_some(value))
+    {
+        let Ok(timestamp) = value.parse::<i64>() else {
+            return UrlExpiry::Malformed;
+        };
+        let Some(expires_at) = DateTime::from_timestamp(timestamp, 0) else {
+            return UrlExpiry::Malformed;
+        };
+        return classify_url_expiry(expires_at, now);
+    }
+
+    for (date_key, lifetime_key) in [
+        ("X-Goog-Date", "X-Goog-Expires"),
+        ("X-Amz-Date", "X-Amz-Expires"),
+    ] {
+        let expiry = parse_relative_url_expiry(&parsed, date_key, lifetime_key, now);
+        if expiry != UrlExpiry::Missing {
+            return expiry;
+        }
+    }
+    UrlExpiry::Missing
 }
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
