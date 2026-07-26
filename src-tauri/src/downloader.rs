@@ -118,22 +118,7 @@ enum UrlExpiry {
     Expired(DateTime<Utc>),
 }
 
-fn parse_url_expiry(url: &str, now: DateTime<Utc>) -> UrlExpiry {
-    let Ok(parsed) = Url::parse(url) else {
-        return UrlExpiry::Missing;
-    };
-    let Some(value) = parsed
-        .query_pairs()
-        .find_map(|(key, value)| (key == "Expires").then_some(value))
-    else {
-        return UrlExpiry::Missing;
-    };
-    let Ok(timestamp) = value.parse::<i64>() else {
-        return UrlExpiry::Malformed;
-    };
-    let Some(expires_at) = DateTime::from_timestamp(timestamp, 0) else {
-        return UrlExpiry::Malformed;
-    };
+fn classify_url_expiry(expires_at: DateTime<Utc>, now: DateTime<Utc>) -> UrlExpiry {
     let confidently_expired = expires_at
         .checked_add_signed(chrono::Duration::seconds(CLOCK_SKEW_TOLERANCE_SECS))
         .is_some_and(|deadline| deadline < now);
@@ -143,6 +128,72 @@ fn parse_url_expiry(url: &str, now: DateTime<Utc>) -> UrlExpiry {
     } else {
         UrlExpiry::Active(expires_at)
     }
+}
+
+fn parse_relative_url_expiry(
+    parsed: &Url,
+    date_key: &str,
+    lifetime_key: &str,
+    now: DateTime<Utc>,
+) -> UrlExpiry {
+    let signed_at = parsed
+        .query_pairs()
+        .find_map(|(key, value)| (key == date_key).then_some(value));
+    let lifetime = parsed
+        .query_pairs()
+        .find_map(|(key, value)| (key == lifetime_key).then_some(value));
+    match (signed_at, lifetime) {
+        (None, None) => UrlExpiry::Missing,
+        (Some(signed_at), Some(lifetime)) => {
+            let Ok(signed_at) = chrono::NaiveDateTime::parse_from_str(&signed_at, "%Y%m%dT%H%M%SZ")
+            else {
+                return UrlExpiry::Malformed;
+            };
+            let Ok(lifetime_seconds) = lifetime.parse::<i64>() else {
+                return UrlExpiry::Malformed;
+            };
+            if lifetime_seconds < 0 {
+                return UrlExpiry::Malformed;
+            }
+            let Some(lifetime) = chrono::Duration::try_seconds(lifetime_seconds) else {
+                return UrlExpiry::Malformed;
+            };
+            let Some(expires_at) = signed_at.and_utc().checked_add_signed(lifetime) else {
+                return UrlExpiry::Malformed;
+            };
+            classify_url_expiry(expires_at, now)
+        }
+        _ => UrlExpiry::Malformed,
+    }
+}
+
+fn parse_url_expiry(url: &str, now: DateTime<Utc>) -> UrlExpiry {
+    let Ok(parsed) = Url::parse(url) else {
+        return UrlExpiry::Missing;
+    };
+    if let Some(value) = parsed
+        .query_pairs()
+        .find_map(|(key, value)| (key == "Expires").then_some(value))
+    {
+        let Ok(timestamp) = value.parse::<i64>() else {
+            return UrlExpiry::Malformed;
+        };
+        let Some(expires_at) = DateTime::from_timestamp(timestamp, 0) else {
+            return UrlExpiry::Malformed;
+        };
+        return classify_url_expiry(expires_at, now);
+    }
+
+    for (date_key, lifetime_key) in [
+        ("X-Goog-Date", "X-Goog-Expires"),
+        ("X-Amz-Date", "X-Amz-Expires"),
+    ] {
+        let expiry = parse_relative_url_expiry(&parsed, date_key, lifetime_key, now);
+        if expiry != UrlExpiry::Missing {
+            return expiry;
+        }
+    }
+    UrlExpiry::Missing
 }
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -1056,6 +1107,99 @@ mod tests {
         assert_eq!(
             parse_url_expiry("https://example.com/a.jpg?Expires=1880", now),
             UrlExpiry::Active(DateTime::from_timestamp(1_880, 0).unwrap())
+        );
+    }
+
+    #[test]
+    fn parses_gcs_v4_expiry() {
+        let now = DateTime::parse_from_rfc3339("2026-02-01T19:45:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let expired_at = DateTime::parse_from_rfc3339("2026-02-01T19:40:47Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        assert_eq!(
+            parse_url_expiry(
+                "https://storage.googleapis.com/bucket/image.jpg?X-Goog-Date=20260125T194047Z&X-Goog-Expires=604800&X-Goog-Signature=secret",
+                now,
+            ),
+            UrlExpiry::Expired(expired_at)
+        );
+        assert_eq!(
+            parse_url_expiry(
+                "https://storage.googleapis.com/bucket/image.jpg?X-Goog-Expires=604800&X-Goog-Date=20260125T195000Z",
+                now,
+            ),
+            UrlExpiry::Active(
+                DateTime::parse_from_rfc3339("2026-02-01T19:50:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc)
+            )
+        );
+        assert_eq!(
+            parse_url_expiry(
+                "https://storage.googleapis.com/bucket/image.jpg?X-Goog-Date=invalid&X-Goog-Expires=604800",
+                now,
+            ),
+            UrlExpiry::Malformed
+        );
+        assert_eq!(
+            parse_url_expiry(
+                "https://storage.googleapis.com/bucket/image.jpg?X-Goog-Date=20260125T194047Z",
+                now,
+            ),
+            UrlExpiry::Malformed
+        );
+        assert_eq!(
+            parse_url_expiry(
+                "https://storage.googleapis.com/bucket/image.jpg?X-Goog-Date=20260125T194047Z&X-Goog-Expires=-1",
+                now,
+            ),
+            UrlExpiry::Malformed
+        );
+    }
+
+    #[test]
+    fn parses_aws_v4_expiry() {
+        let now = DateTime::parse_from_rfc3339("2013-05-25T00:03:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let expired_at = DateTime::parse_from_rfc3339("2013-05-25T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        assert_eq!(
+            parse_url_expiry(
+                "https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Date=20130524T000000Z&X-Amz-Expires=86400&X-Amz-Signature=secret",
+                now,
+            ),
+            UrlExpiry::Expired(expired_at)
+        );
+        assert_eq!(
+            parse_url_expiry(
+                "https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Expires=86400&X-Amz-Date=20130524T120000Z",
+                now,
+            ),
+            UrlExpiry::Active(
+                DateTime::parse_from_rfc3339("2013-05-25T12:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc)
+            )
+        );
+        assert_eq!(
+            parse_url_expiry(
+                "https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Date=invalid&X-Amz-Expires=86400",
+                now,
+            ),
+            UrlExpiry::Malformed
+        );
+        assert_eq!(
+            parse_url_expiry(
+                "https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Date=20130524T000000Z",
+                now,
+            ),
+            UrlExpiry::Malformed
         );
     }
 

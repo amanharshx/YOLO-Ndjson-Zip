@@ -35,6 +35,18 @@ export function DownloadFailureDetails({
   const [copyStatus, setCopyStatus] = useState<
     "idle" | "copied" | "failed"
   >("idle");
+  const copyButtonLabel =
+    copyStatus === "copied"
+      ? "Copied"
+      : copyStatus === "failed"
+        ? "Copy failed"
+        : "Copy details";
+  const copyAnnouncement =
+    copyStatus === "copied"
+      ? "Copied"
+      : copyStatus === "failed"
+        ? "Couldn't copy details"
+        : "";
 
   useEffect(() => {
     if (copyStatus !== "copied") {
@@ -85,18 +97,16 @@ export function DownloadFailureDetails({
           </ul>
           <button
             type="button"
-            className="mt-2 underline underline-offset-2"
+            className="mt-2 font-medium underline underline-offset-2"
             onClick={() => {
               void copyDetails();
             }}
           >
-            Copy details
+            {copyButtonLabel}
           </button>
-          {copyStatus !== "idle" && (
-            <span className="ml-2" role="status">
-              {copyStatus === "copied" ? "Copied" : "Couldn't copy details"}
-            </span>
-          )}
+          <span className="sr-only" role="status">
+            {copyAnnouncement}
+          </span>
         </details>
       )}
     </div>
@@ -316,7 +326,7 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
                 </>
               ) : (
                 <div className="space-y-4">
-                  <Card data-testid="success-card" className="bg-primary/5 p-6">
+                  <Card data-testid="success-card" className="overflow-hidden bg-primary/5 p-6">
                     <div className="flex items-center gap-3 mb-4">
                       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/20">
                         <Check className="h-5 w-5 text-primary" />
@@ -358,7 +368,7 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
 
           {/* Error Display */}
           {error && (
-            <Card data-testid="error-card" className="bg-destructive/10 p-4 text-center">
+            <Card data-testid="error-card" className="overflow-hidden bg-destructive/10 p-4 text-center">
               {errorDownloadMessage ? (
                 <DownloadFailureDetails
                   message={errorDownloadMessage}

@@ -110,8 +110,9 @@ function breakdownLabel(group: FailureGroup): string {
     case "unsupported_scheme":
       return `${count} download ${plural(count, "link")} used an unsupported format`;
     case "server_error":
-    case "http_error":
       return `${count} image server ${plural(count, "error")}`;
+    case "http_error":
+      return `${count} ${plural(count, "download")} ${count === 1 ? "was" : "were"} rejected by the image server`;
     case "response_error":
       return `${count} incomplete ${plural(count, "download")}`;
     case "too_large":
@@ -139,8 +140,9 @@ function breakdownRemedy(kind: FailureKind): string {
     case "blocked_address":
       return "Try a different network or ask your network administrator.";
     case "server_error":
-    case "http_error":
       return "Wait a moment and try again.";
+    case "http_error":
+      return "Export the dataset again or try later.";
     case "too_large":
       return "Use smaller images and try again.";
   }
@@ -149,8 +151,11 @@ function breakdownRemedy(kind: FailureKind): string {
 function formatBreakdown(group: FailureGroup): string {
   const examples = group.examples.slice(0, 3).map(safeExample);
   const label = breakdownLabel(group);
-  const cause =
-    examples.length > 0 ? `${label} — ${examples.join(", ")}` : label;
+  const examplesPrefix =
+    group.count > examples.length ? ", including " : " — ";
+  const cause = examples.length > 0
+    ? `${label}${examplesPrefix}${examples.join(", ")}`
+    : label;
   return `${cause}. ${breakdownRemedy(group.kind)}`;
 }
 
