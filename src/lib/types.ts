@@ -7,14 +7,55 @@ export interface ProgressEvent {
   item: string | null;
 }
 
+export const FAILURE_KINDS = [
+  "missing_url",
+  "expired_url",
+  "access_denied",
+  "not_found",
+  "timeout",
+  "connect",
+  "dns",
+  "blocked_address",
+  "malformed_url",
+  "unsupported_scheme",
+  "server_error",
+  "response_error",
+  "too_large",
+  "http_error",
+  "download_error",
+] as const;
+
+export type FailureKind = (typeof FAILURE_KINDS)[number];
+
+export interface FailureGroup {
+  kind: FailureKind;
+  count: number;
+  examples: string[];
+  http_statuses: number[];
+}
+
+export interface ExpirySummary {
+  all_expired: boolean;
+  latest_expired_at: number | null;
+}
+
+export interface FailureSummary {
+  groups: FailureGroup[];
+  expiry: ExpirySummary | null;
+}
+
+export type ConvertErrorKind = "conversion_failed" | "download_failed";
+
+export interface ConvertError {
+  kind: ConvertErrorKind;
+  message: string;
+  failure_summary: FailureSummary | null;
+}
+
 export interface ConvertResult {
   zip_path: string;
-  file_count: number;
-  image_count: number;
-  download_total: number;
-  failed_downloads: number;
   omitted_images: number;
-  expired_url_failures: number;
+  failure_summary: FailureSummary;
 }
 
 export interface Format {
