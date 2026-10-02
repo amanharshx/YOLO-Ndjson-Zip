@@ -71,7 +71,7 @@ jobs:
           echo "Intel SHA256: $SHA_INTEL"
 
       - name: Checkout homebrew tap
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: amanharshx/homebrew-tap
           token: ${{ secrets.TAP_GITHUB_TOKEN }}
