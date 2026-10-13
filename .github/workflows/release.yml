@@ -4,14 +4,101 @@ run-name: >
   Publish ${{ inputs.tag }}
 
 on:
+  # Started by Finalize Release; run by hand with the same tag to retry a failed release.
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release'
+        description: Existing vX.Y.Z tag to build and publish
         required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
 
 jobs:
-  release:
+  # Runs once on Linux: platform-independent checks, and one draft for all builds to share.
+  prepare:
+    name: Verify tag and prepare draft
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.draft.outputs.release_id }}
+      version: ${{ steps.verify.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+
+      - name: Verify versions match tag
+        id: verify
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '${TAG}' is not vX.Y.Z."
+            exit 1
+          fi
+          EXPECTED="${TAG#v}"
+
+          check() {
+            if [ "$2" != "$EXPECTED" ]; then
+              echo "::error file=$1::version '$2' does not match tag $TAG"
+              exit 1
+            fi
+          }
+          check package.json "$(jq -r .version package.json)"
+          check src-tauri/tauri.conf.json "$(jq -r .version src-tauri/tauri.conf.json)"
+          check src-tauri/Cargo.toml "$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -n1)"
+          check src-tauri/Cargo.lock "$(grep -A1 '^name = "ndjson-converter"$' src-tauri/Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')"
+
+          echo "version=$EXPECTED" >> "$GITHUB_OUTPUT"
+
+      # Drafts cannot be fetched by tag, so search the release list instead.
+      - name: Find or create draft release
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          RELEASES=$(gh api --paginate "repos/${{ github.repository }}/releases?per_page=100" \
+            --jq '.[] | select(.tag_name == env.TAG) | "\(.id) \(.draft)"')
+
+          if grep -q ' false$' <<< "$RELEASES"; then
+            echo "::error::$TAG is already published; refusing to rebuild it."
+            exit 1
+          fi
+
+          DRAFT_IDS=$(sed -n 's/ true$//p' <<< "$RELEASES")
+          case "$(grep -c . <<< "$DRAFT_IDS" || true)" in
+            0)
+              RELEASE_ID=$(gh api --method POST "repos/${{ github.repository }}/releases" \
+                -f tag_name="$TAG" -f name="$TAG" \
+                -F draft=true -F generate_release_notes=true --jq .id)
+              echo "Created draft $RELEASE_ID for $TAG."
+              ;;
+            1)
+              RELEASE_ID="$DRAFT_IDS"
+              echo "Reusing draft $RELEASE_ID for $TAG."
+              ;;
+            *)
+              echo "::error::Found several drafts for $TAG: $(tr '\n' ' ' <<< "$DRAFT_IDS"). Delete the extras."
+              exit 1
+              ;;
+          esac
+
+          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
     permissions:
       contents: write
     strategy:
@@ -31,7 +118,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: refs/tags/${{ inputs.tag }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -67,16 +154,68 @@ jobs:
         run: |
           jq -n --arg pk "$PUBKEY" '{"plugins":{"updater":{"pubkey":$pk}},"bundle":{"createUpdaterArtifacts":true}}' > src-tauri/tauri.release.conf.json
 
-      - name: Build and release
+      # releaseId uploads to the shared draft; tagName fixes the untagged draft URLs in latest.json.
+      - name: Build and upload
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ inputs.tag || github.ref_name }}
-          releaseName: '${{ inputs.tag || github.ref_name }}'
-          generateReleaseNotes: true
-          releaseDraft: false
-          prerelease: false
+          releaseId: ${{ needs.prepare.outputs.release_id }}
+          tagName: ${{ inputs.tag }}
           args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json
+
+  # Publish only after every platform uploaded, so releases/latest never points at a partial release.
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+        run: |
+          gh api --method PATCH "repos/${{ github.repository }}/releases/${RELEASE_ID}" \
+            -F draft=false -f make_latest=true
+
+  homebrew:
+    name: Update Homebrew cask
+    needs: [prepare, publish]
+    runs-on: ubuntu-latest
+    permissions: {}
+
+    steps:
+      # The tap's own workflow downloads both DMGs, computes checksums, and commits the cask.
+      - name: Run tap update and wait for it
+        env:
+          GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          TAP: amanharshx/homebrew-tap
+          VERSION: ${{ needs.prepare.outputs.version }}
+          REQUEST_ID: yolo-ndjson-converter-${{ inputs.tag }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+
+          gh workflow run update-tap.yml --repo "$TAP" \
+            -f cask=yolo-ndjson-converter -f version="$VERSION" -f request_id="$REQUEST_ID"
+
+          # The tap run's title includes the request ID; use it to find the run we started.
+          RUN_ID=""
+          for _ in $(seq 1 24); do
+            RUN_ID=$(gh run list --repo "$TAP" --workflow update-tap.yml --event workflow_dispatch --limit 20 \
+              --json databaseId,displayTitle \
+              --jq '.[] | select(.displayTitle | contains(env.REQUEST_ID)) | .databaseId' | head -n1)
+            if [ -n "$RUN_ID" ]; then
+              break
+            fi
+            sleep 5
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::Tap run for $REQUEST_ID did not start within 2 minutes."
+            exit 1
+          fi
+
+          gh run watch "$RUN_ID" --repo "$TAP" --exit-status --interval 10

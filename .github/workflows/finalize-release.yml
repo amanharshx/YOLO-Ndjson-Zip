@@ -1,0 +1,89 @@
+name: Finalize Release
+
+run-name: >
+  Finalize Release • #${{ github.event.pull_request.number }} •
+  ${{ github.event.pull_request.head.ref }}
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  tag:
+    name: Tag and start release
+    # Only bump PRs opened by Prepare Release, from this repo, that were actually merged.
+    if: >
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'release/bump-v') &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+
+      - name: Verify versions match branch
+        id: version
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+
+          TAG="${HEAD_REF#release/bump-}"
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Branch '${HEAD_REF}' does not name a vX.Y.Z release."
+            exit 1
+          fi
+          EXPECTED="${TAG#v}"
+
+          check() {
+            if [ "$2" != "$EXPECTED" ]; then
+              echo "::error file=$1::version '$2' does not match branch $EXPECTED"
+              exit 1
+            fi
+          }
+          check package.json "$(jq -r .version package.json)"
+          check src-tauri/tauri.conf.json "$(jq -r .version src-tauri/tauri.conf.json)"
+          check src-tauri/Cargo.toml "$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -n1)"
+          check src-tauri/Cargo.lock "$(grep -A1 '^name = "ndjson-converter"$' src-tauri/Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')"
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create tag
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+
+          # Safe to re-run: an existing tag is fine only if it points at this merge.
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            TAGGED_SHA=$(git rev-parse "$TAG^{commit}")
+            if [ "$TAGGED_SHA" != "$MERGE_SHA" ]; then
+              echo "::error::Tag $TAG already exists at $TAGGED_SHA, not $MERGE_SHA."
+              exit 1
+            fi
+            echo "Tag $TAG already points at $MERGE_SHA."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      # Tags pushed with GITHUB_TOKEN start no workflows; workflow_dispatch is the exception.
+      - name: Start Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: gh workflow run release.yml --ref main -f tag="$TAG"

@@ -63,6 +63,27 @@ jobs:
             exit 1
           fi
 
+  # release-please bumps these together; a missed file must fail before the release PR merges
+  versions:
+    name: Version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check version files agree
+        run: |
+          set -euo pipefail
+          EXPECTED="$(jq -r .version package.json)"
+          check() {
+            if [ "$2" != "$EXPECTED" ]; then
+              echo "::error file=$1::version '$2' does not match package.json $EXPECTED"
+              exit 1
+            fi
+          }
+          check src-tauri/tauri.conf.json "$(jq -r .version src-tauri/tauri.conf.json)"
+          check src-tauri/Cargo.toml "$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -n1)"
+          check src-tauri/Cargo.lock "$(grep -A1 '^name = "ndjson-converter"$' src-tauri/Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')"
+
   # Frontend checks
   frontend:
     name: Frontend Check
@@ -208,12 +229,12 @@ jobs:
   ci-pass:
     name: CI Pass
     if: always()
-    needs: [frontend, rust, no-dist-changes]
+    needs: [versions, frontend, rust, no-dist-changes]
     runs-on: ubuntu-latest
     steps:
       - name: Check all required jobs passed
         run: |
-          if [[ "${{ needs.frontend.result }}" == "failure" || "${{ needs.rust.result }}" == "failure" || "${{ needs.no-dist-changes.result }}" == "failure" ]]; then
+          if [[ "${{ needs.versions.result }}" == "failure" || "${{ needs.frontend.result }}" == "failure" || "${{ needs.rust.result }}" == "failure" || "${{ needs.no-dist-changes.result }}" == "failure" ]]; then
             echo "One or more required CI jobs failed."
             exit 1
           fi
