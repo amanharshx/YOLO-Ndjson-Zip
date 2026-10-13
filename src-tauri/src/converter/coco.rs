@@ -68,6 +68,17 @@ struct CocoFormat {
 
 pub struct CocoConverter;
 
+/// Shoelace area of a flat `[x0, y0, x1, y1, ...]` polygon, independent of winding order.
+fn polygon_area(flat_points: &[f64]) -> f64 {
+    let points: Vec<&[f64]> = flat_points.chunks_exact(2).collect();
+    let twice_signed_area: f64 = points
+        .iter()
+        .zip(points.iter().cycle().skip(1))
+        .map(|(a, b)| a[0] * b[1] - b[0] * a[1])
+        .sum();
+    twice_signed_area.abs() / 2.0
+}
+
 impl CocoConverter {
     pub fn new() -> Self {
         Self
@@ -168,7 +179,7 @@ impl CocoConverter {
                             image_id: img_id,
                             category_id: seg.class_id,
                             bbox: [min_x, min_y, w, h],
-                            area: w * h,
+                            area: polygon_area(&abs_points),
                             iscrowd: 0,
                             segmentation: vec![abs_points],
                             keypoints: None,
@@ -244,7 +255,7 @@ impl CocoConverter {
                             image_id: img_id,
                             category_id: obb.class_id,
                             bbox: [min_x, min_y, w, h],
-                            area: w * h,
+                            area: polygon_area(&abs_points),
                             iscrowd: 0,
                             segmentation: vec![abs_points],
                             keypoints: None,
@@ -476,6 +487,62 @@ mod tests {
                 assert!(categories.iter().any(|(id, _)| *id == category_id));
             }
         }
+    }
+
+    fn first_annotation(ndjson: &str) -> serde_json::Value {
+        let data = parse_ndjson(ndjson).unwrap();
+        let files = CocoConverter::new().convert(&data, &HashMap::new());
+        let coco: serde_json::Value =
+            serde_json::from_slice(&files["train/_annotations.coco.json"]).unwrap();
+        coco["annotations"][0].clone()
+    }
+
+    #[test]
+    fn obb_area_is_polygon_area_not_bbox_area() {
+        let annotation = first_annotation(
+            r#"{"type":"dataset","task":"obb","name":"test","class_names":{"0":"ship"}}
+{"type":"image","file":"a.jpg","width":640,"height":480,"split":"train","annotations":{"obb":[[0,0.5,0.2,0.7,0.5,0.5,0.8,0.3,0.5]]}}"#,
+        );
+
+        assert!((annotation["area"].as_f64().unwrap() - 36864.0).abs() < 0.01);
+        let bbox: Vec<f64> = serde_json::from_value(annotation["bbox"].clone()).unwrap();
+        let expected = [192.0, 96.0, 256.0, 288.0];
+        for (actual, expected) in bbox.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-9, "{bbox:?}");
+        }
+    }
+
+    #[test]
+    fn segment_area_is_polygon_area_for_either_winding_order() {
+        // L-shape on 100x200: 50x50 square plus 25x50 leg = 3750 px² (upright box would be 5000).
+        let forward = "0,0,0,0.5,0,0.5,0.25,0.25,0.25,0.25,0.5,0,0.5";
+        let reversed = "0,0,0.5,0.25,0.5,0.25,0.25,0.5,0.25,0.5,0,0,0";
+        for task in ["segment", "semantic"] {
+            for points in [forward, reversed] {
+                let annotation = first_annotation(&format!(
+                    r#"{{"type":"dataset","task":"{task}","name":"test","class_names":{{"0":"car"}}}}
+{{"type":"image","file":"a.jpg","width":100,"height":200,"split":"train","annotations":{{"segments":[[{points}]]}}}}"#
+                ));
+
+                assert_eq!(annotation["area"], json!(3750.0), "{task} [{points}]");
+                assert_eq!(annotation["bbox"], json!([0.0, 0.0, 50.0, 100.0]));
+            }
+        }
+    }
+
+    #[test]
+    fn detect_and_pose_area_is_bbox_area() {
+        let detect = first_annotation(
+            r#"{"type":"dataset","task":"detect","name":"test","class_names":{"0":"cat"}}
+{"type":"image","file":"a.jpg","width":640,"height":480,"split":"train","annotations":{"boxes":[[0,0.5,0.5,0.2,0.3]]}}"#,
+        );
+        let pose = first_annotation(
+            r#"{"type":"dataset","task":"pose","name":"test","class_names":{"0":"person"},"kpt_shape":[1,3]}
+{"type":"image","file":"a.jpg","width":100,"height":200,"split":"train","annotations":{"pose":[[0,0.5,0.5,0.4,0.6,0.5,0.5,2]]}}"#,
+        );
+
+        assert!((detect["area"].as_f64().unwrap() - 18432.0).abs() < 0.01);
+        assert!((pose["area"].as_f64().unwrap() - 4800.0).abs() < 0.01);
     }
 
     #[test]
