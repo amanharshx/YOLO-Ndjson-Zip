@@ -12,6 +12,8 @@ pub enum ParseError {
     IoError(#[from] std::io::Error),
     #[error("Invalid pose annotations: {0}")]
     InvalidPose(String),
+    #[error("Invalid split: {0}")]
+    InvalidSplit(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +92,20 @@ where
     }
 }
 
+/// Missing or null splits become empty; other non-strings keep their JSON text so the
+/// split check can name them.
+fn deserialize_split<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Null => Ok(String::new()),
+        other => Ok(other.to_string()),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageEntry {
     #[serde(default)]
@@ -101,15 +117,13 @@ pub struct ImageEntry {
     pub url: String,
     pub width: i32,
     pub height: i32,
-    #[serde(default = "default_split")]
+    #[serde(default, deserialize_with = "deserialize_split")]
     pub split: String,
     #[serde(default)]
     pub annotations: Option<serde_json::Value>,
 }
 
-fn default_split() -> String {
-    "train".to_string()
-}
+const ACCEPTED_SPLITS: [&str; 4] = ["train", "val", "valid", "test"];
 
 pub fn normalize_split(split: &str) -> &str {
     match split {
@@ -536,8 +550,39 @@ pub fn parse_ndjson(content: &str) -> Result<NDJSONData, ParseError> {
     }
 
     let metadata = metadata.ok_or(ParseError::NoMetadata)?;
+    validate_splits(&images)?;
 
     Ok(NDJSONData { metadata, images })
+}
+
+/// Rejects missing or unknown splits before download, so no image is fetched and then
+/// silently dropped from every format's output.
+fn validate_splits(images: &[ImageEntry]) -> Result<(), ParseError> {
+    let mut invalid = images
+        .iter()
+        .filter(|image| !ACCEPTED_SPLITS.contains(&image.split.as_str()));
+    let Some(image) = invalid.next() else {
+        return Ok(());
+    };
+
+    let problem = if image.split.is_empty() {
+        "is missing its split".to_string()
+    } else {
+        format!("has unknown value '{}'", image.split)
+    };
+    let affected = 1 + invalid.count();
+    let count = if affected > 1 {
+        format!(" ({} image lines affected)", affected)
+    } else {
+        String::new()
+    };
+    Err(ParseError::InvalidSplit(format!(
+        "image '{}' {}{}. Accepted splits: {}.",
+        image.file,
+        problem,
+        count,
+        ACCEPTED_SPLITS.join(", ")
+    )))
 }
 
 #[cfg(test)]
@@ -770,7 +815,8 @@ mod tests {
 
     #[test]
     fn parse_missing_metadata_returns_error() {
-        let content = r#"{"type":"image","file":"img1.jpg","width":640,"height":480}"#;
+        let content =
+            r#"{"type":"image","file":"img1.jpg","width":640,"height":480,"split":"train"}"#;
 
         let result = parse_ndjson(content);
         assert!(result.is_err());
@@ -918,6 +964,94 @@ mod tests {
         assert!(valid
             .iter()
             .all(|img| img.split == "valid" || img.split == "val"));
+    }
+
+    const SPLIT_TEST_DATASET: &str = r#"{"type":"dataset","name":"test","class_names":{}}"#;
+
+    fn parse_split_error(image_lines: &str) -> String {
+        let error = parse_ndjson(&format!("{SPLIT_TEST_DATASET}\n{image_lines}")).unwrap_err();
+        assert!(matches!(error, ParseError::InvalidSplit(_)), "{error}");
+        error.to_string()
+    }
+
+    #[test]
+    fn accepted_splits_are_kept_unchanged() {
+        let content = format!(
+            r#"{SPLIT_TEST_DATASET}
+{{"type":"image","file":"a.jpg","width":1,"height":1,"split":"train"}}
+{{"type":"image","file":"b.jpg","width":1,"height":1,"split":"val"}}
+{{"type":"image","file":"c.jpg","width":1,"height":1,"split":"valid"}}
+{{"type":"image","file":"d.jpg","width":1,"height":1,"split":"test"}}"#
+        );
+
+        let data = parse_ndjson(&content).unwrap();
+
+        let splits: Vec<&str> = data.images.iter().map(|img| img.split.as_str()).collect();
+        assert_eq!(splits, ["train", "val", "valid", "test"]);
+    }
+
+    #[test]
+    fn unknown_split_is_rejected_naming_value_and_image() {
+        let error = parse_split_error(
+            r#"{"type":"image","file":"a.jpg","width":1,"height":1,"split":"train"}
+{"type":"image","file":"b.jpg","width":1,"height":1,"split":"validation"}"#,
+        );
+
+        assert_eq!(
+            error,
+            "Invalid split: image 'b.jpg' has unknown value 'validation'. \
+             Accepted splits: train, val, valid, test."
+        );
+    }
+
+    #[test]
+    fn missing_split_is_rejected_instead_of_defaulting_to_train() {
+        let error = parse_split_error(r#"{"type":"image","file":"a.jpg","width":1,"height":1}"#);
+
+        assert_eq!(
+            error,
+            "Invalid split: image 'a.jpg' is missing its split. \
+             Accepted splits: train, val, valid, test."
+        );
+    }
+
+    #[test]
+    fn null_or_non_string_split_is_rejected_naming_the_image() {
+        let cases = [
+            (r#""split":null"#, "is missing its split"),
+            (r#""split":1"#, "has unknown value '1'"),
+            (r#""split":["train"]"#, r#"has unknown value '["train"]'"#),
+        ];
+        for (split, expected) in cases {
+            let error = parse_split_error(&format!(
+                r#"{{"type":"image","file":"a.jpg","width":1,"height":1,{split}}}"#
+            ));
+
+            assert_eq!(
+                error,
+                format!(
+                    "Invalid split: image 'a.jpg' {expected}. \
+                     Accepted splits: train, val, valid, test."
+                ),
+                "{split}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_split_count_is_reported_when_several_lines_are_affected() {
+        let error = parse_split_error(
+            r#"{"type":"image","file":"a.jpg","width":1,"height":1,"split":"train"}
+{"type":"image","file":"b.jpg","width":1,"height":1,"split":"validation"}
+{"type":"image","file":"c.jpg","width":1,"height":1}
+{"type":"image","file":"d.jpg","width":1,"height":1,"split":"Train"}"#,
+        );
+
+        assert_eq!(
+            error,
+            "Invalid split: image 'b.jpg' has unknown value 'validation' (3 image lines affected). \
+             Accepted splits: train, val, valid, test."
+        );
     }
 
     #[test]
