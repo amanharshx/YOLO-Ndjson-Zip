@@ -77,11 +77,11 @@ impl CocoConverter {
         &self,
         images: &[&ImageEntry],
         data: &NDJSONData,
+        class_names: &[String],
         _split: &str,
         num_kpts: usize,
         kpt_dims: usize,
     ) -> String {
-        let class_names = get_class_list(data);
         let now = Utc::now();
         let task = &data.metadata.task;
         let is_pose = task == "pose";
@@ -290,6 +290,7 @@ impl Converter for CocoConverter {
     ) -> HashMap<String, Vec<u8>> {
         let mut files: HashMap<String, Vec<u8>> = HashMap::new();
         let task = &data.metadata.task;
+        let class_names = get_class_list(data);
 
         // convert_ndjson validates pose rows and populates kpt_shape before conversion.
         let (num_kpts, kpt_dims) = if task == "pose" {
@@ -327,7 +328,8 @@ impl Converter for CocoConverter {
             }
 
             // Create JSON at {split}/_annotations.coco.json
-            let coco_json = self.create_coco_json(images, data, split, num_kpts, kpt_dims);
+            let coco_json =
+                self.create_coco_json(images, data, &class_names, split, num_kpts, kpt_dims);
             files.insert(
                 format!("{}/_annotations.coco.json", split),
                 coco_json.into_bytes(),
@@ -341,7 +343,7 @@ impl Converter for CocoConverter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::{image_download_key, DatasetMetadata};
+    use crate::parser::{image_download_key, parse_ndjson, DatasetMetadata};
     use serde_json::json;
 
     #[test]
@@ -442,6 +444,38 @@ mod tests {
                 .and_then(|v| v.as_str()),
             Some("img1__abcd1234.jpg")
         );
+    }
+
+    #[test]
+    fn categories_cover_every_annotation_category_id() {
+        let data = parse_ndjson(
+            r#"{"type":"dataset","task":"detect","name":"test","class_names":{"0":"cat"}}
+{"type":"image","file":"a.jpg","width":640,"height":480,"split":"train","annotations":{"boxes":[[0,0.5,0.5,0.2,0.2]]}}
+{"type":"image","file":"b.jpg","width":640,"height":480,"split":"val","annotations":{"boxes":[[3,0.5,0.5,0.2,0.2]]}}"#,
+        )
+        .unwrap();
+
+        let files = CocoConverter::new().convert(&data, &HashMap::new());
+
+        for split in ["train", "valid"] {
+            let coco: serde_json::Value =
+                serde_json::from_slice(&files[&format!("{split}/_annotations.coco.json")]).unwrap();
+            let categories: Vec<(i64, &str)> = coco["categories"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|c| (c["id"].as_i64().unwrap(), c["name"].as_str().unwrap()))
+                .collect();
+            assert_eq!(
+                categories,
+                vec![(0, "cat"), (1, "class1"), (2, "class2"), (3, "class3")],
+                "{split}"
+            );
+            for annotation in coco["annotations"].as_array().unwrap() {
+                let category_id = annotation["category_id"].as_i64().unwrap();
+                assert!(categories.iter().any(|(id, _)| *id == category_id));
+            }
+        }
     }
 
     #[test]

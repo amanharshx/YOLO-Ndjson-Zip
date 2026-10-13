@@ -167,6 +167,24 @@ impl ImageEntry {
             .collect()
     }
 
+    /// Class IDs of every annotation row, whatever the task (as Ultralytics collects them).
+    pub fn annotation_class_ids(&self) -> impl Iterator<Item = i32> + '_ {
+        let annotations = self.annotations.as_ref();
+        let row_ids = ["boxes", "bboxes", "segments", "pose", "obb"]
+            .into_iter()
+            .filter_map(move |key| annotations?.get(key)?.as_array())
+            .flatten()
+            .filter_map(|row| row.as_array()?.first()?.as_i64());
+        let classification_ids = annotations
+            .and_then(|annotations| annotations.get("classification"))
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_i64);
+
+        row_ids.chain(classification_ids).map(|id| id as i32)
+    }
+
     pub fn get_classifications(&self) -> Vec<i32> {
         let Some(annotations) = &self.annotations else {
             return Vec::new();

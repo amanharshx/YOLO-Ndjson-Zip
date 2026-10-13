@@ -3,7 +3,7 @@ pub mod createml;
 pub mod pascal_voc;
 pub mod yolo;
 
-use crate::parser::NDJSONData;
+use crate::parser::{ImageEntry, NDJSONData};
 use std::collections::HashMap;
 
 pub trait Converter {
@@ -33,27 +33,38 @@ pub fn get_class_names(data: &NDJSONData) -> HashMap<i32, String> {
         .collect()
 }
 
+/// Name for a class ID, with the Ultralytics `class{i}` placeholder when it has none.
+pub fn class_name(class_names: &HashMap<i32, String>, id: i32) -> String {
+    class_names
+        .get(&id)
+        .cloned()
+        .unwrap_or_else(|| format!("class{}", id))
+}
+
+/// Class names for IDs 0..=max(class_names key, annotation class ID).
 pub fn get_class_list(data: &NDJSONData) -> Vec<String> {
     let class_names = get_class_names(data);
-    if class_names.is_empty() {
-        return Vec::new();
-    }
+    let max_id = class_names
+        .keys()
+        .copied()
+        .chain(
+            data.images
+                .iter()
+                .flat_map(ImageEntry::annotation_class_ids),
+        )
+        .max();
 
-    let max_id = *class_names.keys().max().unwrap_or(&0);
-    (0..=max_id)
-        .map(|i| {
-            class_names
-                .get(&i)
-                .cloned()
-                .unwrap_or_else(|| format!("class_{}", i))
-        })
-        .collect()
+    match max_id {
+        Some(max_id) => (0..=max_id).map(|i| class_name(&class_names, i)).collect(),
+        None => Vec::new(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::{DatasetMetadata, NDJSONData};
+    use crate::parser::{DatasetMetadata, ImageEntry, NDJSONData};
+    use serde_json::json;
 
     fn make_metadata_with_classes(class_names: HashMap<String, String>) -> NDJSONData {
         NDJSONData {
@@ -101,5 +112,47 @@ mod tests {
         let class_list = get_class_list(&data);
 
         assert_eq!(class_list, vec!["cat", "dog", "bird"]);
+    }
+
+    #[test]
+    fn get_class_list_fills_gaps_with_placeholders() {
+        let data = make_metadata_with_classes(HashMap::from([
+            ("0".to_string(), "a".to_string()),
+            ("2".to_string(), "c".to_string()),
+        ]));
+
+        assert_eq!(get_class_list(&data), vec!["a", "class1", "c"]);
+    }
+
+    #[test]
+    fn get_class_list_covers_ids_from_every_annotation_row_kind() {
+        let rows = [
+            json!({ "boxes": [[2, 0.5, 0.5, 0.2, 0.2]] }),
+            json!({ "bboxes": [[2, 0.5, 0.5, 0.2, 0.2]] }),
+            json!({ "segments": [[2, 0.1, 0.1, 0.9, 0.1, 0.5, 0.9]] }),
+            json!({ "pose": [[2, 0.5, 0.5, 0.2, 0.2, 0.5, 0.5, 2]] }),
+            json!({ "obb": [[2, 0.1, 0.1, 0.9, 0.1, 0.9, 0.9, 0.1, 0.9]] }),
+            json!({ "classification": [2] }),
+        ];
+
+        for annotations in rows {
+            let mut data = make_metadata_with_classes(HashMap::new());
+            data.images.push(ImageEntry {
+                r#type: "image".to_string(),
+                file: "a.jpg".to_string(),
+                output_file: None,
+                url: String::new(),
+                width: 640,
+                height: 480,
+                split: "train".to_string(),
+                annotations: Some(annotations.clone()),
+            });
+
+            assert_eq!(
+                get_class_list(&data),
+                vec!["class0", "class1", "class2"],
+                "{annotations}"
+            );
+        }
     }
 }

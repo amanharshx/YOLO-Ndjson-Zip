@@ -1,4 +1,4 @@
-use super::{get_class_list, get_class_names, Converter};
+use super::{class_name, get_class_list, get_class_names, Converter};
 use crate::parser::{image_download_key, ImageEntry, NDJSONData};
 use std::collections::HashMap;
 
@@ -56,8 +56,7 @@ impl YoloConverter {
         Self { darknet: true }
     }
 
-    fn create_data_yaml(&self, data: &NDJSONData) -> String {
-        let class_names = get_class_list(data);
+    fn create_data_yaml(&self, data: &NDJSONData, class_names: &[String]) -> String {
         let task = &data.metadata.task;
         // Split presence reflects data.images after download filtering when images are requested.
         let splits = SplitPresence::from_data(data);
@@ -174,10 +173,10 @@ impl Converter for YoloConverter {
     ) -> HashMap<String, Vec<u8>> {
         let mut files: HashMap<String, Vec<u8>> = HashMap::new();
         let task = &data.metadata.task;
+        let class_list = get_class_list(data);
 
         if self.darknet {
             // Darknet mode: _darknet.labels instead of data.yaml/classes.txt
-            let class_list = get_class_list(data);
             files.insert(
                 "_darknet.labels".to_string(),
                 class_list.join("\n").into_bytes(),
@@ -187,10 +186,9 @@ impl Converter for YoloConverter {
             if task != "classify" {
                 files.insert(
                     "data.yaml".to_string(),
-                    self.create_data_yaml(data).into_bytes(),
+                    self.create_data_yaml(data, &class_list).into_bytes(),
                 );
             }
-            let class_list = get_class_list(data);
             files.insert(
                 "classes.txt".to_string(),
                 class_list.join("\n").into_bytes(),
@@ -227,11 +225,8 @@ impl Converter for YoloConverter {
                         let classifications = img.get_classifications();
                         if let Some(&class_id) = classifications.first() {
                             let class_names = get_class_names(data);
-                            let class_name = class_names
-                                .get(&class_id)
-                                .cloned()
-                                .unwrap_or_else(|| format!("class_{}", class_id));
-                            let class_dir = sanitize_path_segment(&class_name);
+                            let class_dir =
+                                sanitize_path_segment(&class_name(&class_names, class_id));
 
                             if let Some(image_data) =
                                 downloaded_images.get(&image_download_key(split, image_file))
@@ -426,13 +421,54 @@ mod tests {
     }
 
     #[test]
+    fn class_list_extends_to_highest_label_id() {
+        let data = make_data(
+            "detect",
+            HashMap::from([("0".to_string(), "cat".to_string())]),
+            None,
+            vec![ImageEntry {
+                annotations: Some(json!({ "boxes": [[2, 0.5, 0.5, 0.2, 0.2]] })),
+                ..image_with_split("train")
+            }],
+        );
+
+        let files = YoloConverter::new().convert(&data, &HashMap::new());
+        let yaml = std::str::from_utf8(&files["data.yaml"]).unwrap();
+        let darknet = YoloConverter::new_darknet().convert(&data, &HashMap::new());
+
+        assert!(yaml.contains("nc: 3\nnames:\n  0: \"cat\"\n  1: \"class1\"\n  2: \"class2\"\n"));
+        assert_eq!(files["classes.txt"], b"cat\nclass1\nclass2");
+        assert_eq!(darknet["_darknet.labels"], b"cat\nclass1\nclass2");
+    }
+
+    #[test]
+    fn class_list_without_class_names_comes_from_label_ids() {
+        let data = make_data(
+            "detect",
+            HashMap::new(),
+            None,
+            vec![ImageEntry {
+                annotations: Some(json!({
+                    "boxes": [[0, 0.5, 0.5, 0.2, 0.2], [2, 0.4, 0.4, 0.1, 0.1]]
+                })),
+                ..image_with_split("train")
+            }],
+        );
+
+        let files = YoloConverter::new().convert(&data, &HashMap::new());
+        let yaml = std::str::from_utf8(&files["data.yaml"]).unwrap();
+
+        assert!(yaml.contains("nc: 3\nnames:\n  0: \"class0\"\n  1: \"class1\"\n  2: \"class2\"\n"));
+    }
+
+    #[test]
     fn create_data_yaml_quotes_class_names() {
         let mut class_names = HashMap::new();
         class_names.insert("0".to_string(), "cat: {evil: true}\n# injected".to_string());
         let data = make_data("detect", class_names, None, vec![]);
         let converter = YoloConverter::new();
 
-        let yaml = converter.create_data_yaml(&data);
+        let yaml = converter.create_data_yaml(&data, &get_class_list(&data));
 
         assert!(yaml.contains(r#"0: "cat: {evil: true}\n# injected""#));
     }

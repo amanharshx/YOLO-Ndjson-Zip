@@ -1,4 +1,4 @@
-use super::{get_class_names, Converter};
+use super::{class_name, get_class_names, Converter};
 use crate::parser::{image_download_key, ImageEntry, NDJSONData};
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
@@ -75,12 +75,7 @@ impl PascalVocConverter {
                     .write_event(Event::Start(BytesStart::new("object")))
                     .ok();
 
-                let class_name = class_names
-                    .get(&obb.class_id)
-                    .cloned()
-                    .unwrap_or_else(|| format!("class_{}", obb.class_id));
-
-                Self::write_element(&mut writer, "name", &class_name);
+                Self::write_element(&mut writer, "name", &class_name(class_names, obb.class_id));
                 Self::write_element(&mut writer, "pose", "Unspecified");
                 Self::write_element(&mut writer, "truncated", "0");
                 Self::write_element(&mut writer, "difficult", "0");
@@ -126,12 +121,7 @@ impl PascalVocConverter {
                     .write_event(Event::Start(BytesStart::new("object")))
                     .ok();
 
-                let class_name = class_names
-                    .get(&seg.class_id)
-                    .cloned()
-                    .unwrap_or_else(|| format!("class_{}", seg.class_id));
-
-                Self::write_element(&mut writer, "name", &class_name);
+                Self::write_element(&mut writer, "name", &class_name(class_names, seg.class_id));
                 Self::write_element(&mut writer, "pose", "Unspecified");
                 Self::write_element(&mut writer, "truncated", "0");
                 Self::write_element(&mut writer, "difficult", "0");
@@ -174,12 +164,7 @@ impl PascalVocConverter {
                     .write_event(Event::Start(BytesStart::new("object")))
                     .ok();
 
-                let class_name = class_names
-                    .get(&bbox.class_id)
-                    .cloned()
-                    .unwrap_or_else(|| format!("class_{}", bbox.class_id));
-
-                Self::write_element(&mut writer, "name", &class_name);
+                Self::write_element(&mut writer, "name", &class_name(class_names, bbox.class_id));
                 Self::write_element(&mut writer, "pose", "Unspecified");
                 Self::write_element(&mut writer, "truncated", "0");
                 Self::write_element(&mut writer, "difficult", "0");
@@ -246,16 +231,16 @@ impl Converter for PascalVocConverter {
                     let image_file = img.effective_file_name();
                     let classifications = img.get_classifications();
                     if let Some(&class_id) = classifications.first() {
-                        let class_name = class_names
-                            .get(&class_id)
-                            .cloned()
-                            .unwrap_or_else(|| format!("class_{}", class_id));
-
                         if let Some(image_data) =
                             downloaded_images.get(&image_download_key(split, image_file))
                         {
                             files.insert(
-                                format!("{}/{}/{}", split, class_name, image_file),
+                                format!(
+                                    "{}/{}/{}",
+                                    split,
+                                    class_name(&class_names, class_id),
+                                    image_file
+                                ),
                                 image_data.clone(),
                             );
                         }
@@ -345,6 +330,41 @@ mod tests {
 
         assert_eq!(files.get("train/img1.jpg"), Some(&vec![1]));
         assert_eq!(files.get("valid/img1.jpg"), Some(&vec![2]));
+    }
+
+    #[test]
+    fn object_names_use_placeholder_for_unnamed_class_ids() {
+        let data = NDJSONData {
+            metadata: DatasetMetadata {
+                r#type: "dataset".to_string(),
+                task: "detect".to_string(),
+                name: "test".to_string(),
+                description: String::new(),
+                bytes: 0,
+                url: String::new(),
+                class_names: HashMap::from([("0".to_string(), "cat".to_string())]),
+                kpt_shape: None,
+                version: "1".to_string(),
+            },
+            images: vec![ImageEntry {
+                r#type: "image".to_string(),
+                file: "a.jpg".to_string(),
+                output_file: None,
+                url: String::new(),
+                width: 640,
+                height: 480,
+                split: "train".to_string(),
+                annotations: Some(json!({
+                    "boxes": [[0, 0.5, 0.5, 0.2, 0.2], [2, 0.4, 0.4, 0.1, 0.1]]
+                })),
+            }],
+        };
+
+        let files = PascalVocConverter::new().convert(&data, &HashMap::new());
+        let xml = std::str::from_utf8(&files["train/a.xml"]).unwrap();
+
+        assert!(xml.contains("<name>cat</name>"));
+        assert!(xml.contains("<name>class2</name>"));
     }
 
     #[test]
