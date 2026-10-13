@@ -2,11 +2,11 @@ mod converter;
 mod downloader;
 mod parser;
 
-use converter::{get_class_list, get_converter};
+use converter::{check_task_format, get_class_list, get_converter};
 use downloader::{DownloadResult, Downloader, FailureSummary, ProgressEvent};
 use parser::{normalize_split, parse_ndjson, ImageEntry, NDJSONData, ParseError};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use tauri::ipc::Channel;
@@ -169,24 +169,34 @@ fn next_unique_file_name(
     }
 }
 
-/// True when a `semantic` dataset has no polygon segments in any image.
-/// Per-image empty is still valid; this only triggers when the entire dataset
-/// is devoid of polygons (e.g. PNG-mask-origin exports).
-fn semantic_dataset_has_no_polygons(data: &NDJSONData) -> bool {
-    data.metadata.task == "semantic"
-        && data
+/// Rejects a `semantic` dataset with no polygon segments in any image, naming the
+/// annotation keys it does carry. Per-image empty is still valid.
+fn validate_semantic_polygons(data: &NDJSONData) -> Result<(), String> {
+    if data.metadata.task != "semantic"
+        || data
             .images
             .iter()
-            .all(|img| img.get_segment_annotations().is_empty())
-}
+            .any(|img| !img.get_segment_annotations().is_empty())
+    {
+        return Ok(());
+    }
 
-/// Semantic datasets are polygon data, so they can only target polygon-capable
-/// formats. `yolo_darknet`, `createml`, and `tfrecord` cannot represent polygons.
-fn semantic_format_supported(format: &str) -> bool {
-    matches!(
-        format.to_ascii_lowercase().as_str(),
-        "yolo" | "coco" | "pascal_voc" | "voc"
-    )
+    let keys: BTreeSet<&str> = data
+        .images
+        .iter()
+        .filter_map(|img| img.annotations.as_ref()?.as_object())
+        .flat_map(|annotations| annotations.keys().map(String::as_str))
+        .collect();
+    let keys = if keys.is_empty() {
+        "none".to_string()
+    } else {
+        keys.into_iter().collect::<Vec<_>>().join(", ")
+    };
+    Err(format!(
+        "Semantic dataset has no polygons under annotations.segments in any image. \
+         Annotation keys found: {}.",
+        keys
+    ))
 }
 
 fn validate_pose_dataset(data: &mut NDJSONData) -> Result<(), ParseError> {
@@ -309,6 +319,7 @@ async fn convert_ndjson(
         .ok();
 
     let mut data = parse_ndjson(&content).map_err(|e| format!("Failed to parse NDJSON: {}", e))?;
+    check_task_format(&data.metadata.task, &format)?;
     validate_pose_dataset(&mut data).map_err(|e| e.to_string())?;
     data.images = prepare_images_with_unique_output_names(&data.images);
     let original_image_count = data.images.len();
@@ -322,26 +333,7 @@ async fn convert_ndjson(
         })
         .ok();
 
-    // Semantic segmentation is polygon data; only polygon-capable formats can
-    // represent it. Reject other formats (e.g. CreateML/TFRecord/Darknet) up front.
-    if data.metadata.task == "semantic" && !semantic_format_supported(&format) {
-        return Err(format!(
-            "The '{}' format does not support semantic segmentation datasets. \
-             Use YOLO, COCO, or Pascal VOC.",
-            format
-        )
-        .into());
-    }
-
-    // Semantic datasets carry polygon segments. PNG-mask-origin exports arrive
-    // with no real polygons (and often junk class names), which would silently
-    // produce an empty dataset. Fail fast before downloading anything.
-    if semantic_dataset_has_no_polygons(&data) {
-        return Err("Semantic dataset has no polygon segments in any image. \
-             PNG-mask exports are not supported; provide polygon annotations."
-            .to_string()
-            .into());
-    }
+    validate_semantic_polygons(&data)?;
 
     // Download images if requested
     let download_result = if include_images {
@@ -479,9 +471,9 @@ pub fn run() {
 mod tests {
     use super::{
         file_name_with_suffix, filter_images_without_downloads, is_ndjson_size_allowed,
-        normalize_zip_path, prepare_images_with_unique_output_names,
-        semantic_dataset_has_no_polygons, semantic_format_supported, short_stable_hash,
-        validate_downloaded_image_count, validate_pose_dataset, ConvertErrorKind, MAX_NDJSON_BYTES,
+        normalize_zip_path, prepare_images_with_unique_output_names, short_stable_hash,
+        validate_downloaded_image_count, validate_pose_dataset, validate_semantic_polygons,
+        ConvertErrorKind, MAX_NDJSON_BYTES,
     };
     use crate::converter::{get_class_list, get_converter};
     use crate::downloader::{FailureGroup, FailureKind, FailureSummary};
@@ -617,28 +609,30 @@ mod tests {
     }
 
     #[test]
-    fn semantic_format_supported_allows_polygon_formats() {
-        assert!(semantic_format_supported("yolo"));
-        assert!(semantic_format_supported("coco"));
-        assert!(semantic_format_supported("pascal_voc"));
-        assert!(semantic_format_supported("voc"));
-    }
-
-    #[test]
-    fn semantic_format_supported_rejects_non_polygon_formats() {
-        assert!(!semantic_format_supported("yolo_darknet"));
-        assert!(!semantic_format_supported("createml"));
-        assert!(!semantic_format_supported("tfrecord"));
-    }
-
-    #[test]
-    fn semantic_guard_flags_dataset_without_polygons() {
-        // PNG-mask-origin export: semantic task, junk classes, no segments.
-        let content = r#"{"type":"dataset","task":"semantic","name":"masks","class_names":{"0":"0","1":"1"}}
-{"type":"image","file":"a.png","width":512,"height":512,"split":"train","annotations":{}}
-{"type":"image","file":"b.png","width":512,"height":512,"split":"train","annotations":{"segments":[]}}"#;
+    fn semantic_without_polygons_lists_annotation_keys_found() {
+        let content = r#"{"type":"dataset","task":"semantic","name":"masks","class_names":{"0":"road"}}
+{"type":"image","file":"a.png","width":512,"height":512,"split":"train","annotations":{"boxes":[[0,0.5,0.5,0.2,0.2]]}}
+{"type":"image","file":"b.png","width":512,"height":512,"split":"train","annotations":{"segments":[],"masks":"b_mask.png"}}"#;
         let data = parse_ndjson(content).unwrap();
-        assert!(semantic_dataset_has_no_polygons(&data));
+
+        assert_eq!(
+            validate_semantic_polygons(&data).unwrap_err(),
+            "Semantic dataset has no polygons under annotations.segments in any image. \
+             Annotation keys found: boxes, masks, segments."
+        );
+    }
+
+    #[test]
+    fn semantic_without_any_annotations_reports_no_keys() {
+        let content = r#"{"type":"dataset","task":"semantic","name":"empty","class_names":{"0":"road"}}
+{"type":"image","file":"a.png","width":512,"height":512,"split":"train"}"#;
+        let data = parse_ndjson(content).unwrap();
+
+        assert_eq!(
+            validate_semantic_polygons(&data).unwrap_err(),
+            "Semantic dataset has no polygons under annotations.segments in any image. \
+             Annotation keys found: none."
+        );
     }
 
     #[test]
@@ -648,7 +642,7 @@ mod tests {
 {"type":"image","file":"a.png","width":512,"height":512,"split":"train","annotations":{}}
 {"type":"image","file":"b.png","width":512,"height":512,"split":"train","annotations":{"segments":[[0,0.1,0.1,0.2,0.1,0.2,0.2]]}}"#;
         let data = parse_ndjson(content).unwrap();
-        assert!(!semantic_dataset_has_no_polygons(&data));
+        assert!(validate_semantic_polygons(&data).is_ok());
     }
 
     #[test]
@@ -657,7 +651,7 @@ mod tests {
         let content = r#"{"type":"dataset","task":"detect","name":"d","class_names":{"0":"cat"}}
 {"type":"image","file":"a.jpg","width":512,"height":512,"split":"train","annotations":{"bboxes":[[0,0.5,0.5,0.2,0.2]]}}"#;
         let data = parse_ndjson(content).unwrap();
-        assert!(!semantic_dataset_has_no_polygons(&data));
+        assert!(validate_semantic_polygons(&data).is_ok());
     }
 
     #[test]
