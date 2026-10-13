@@ -343,7 +343,7 @@ impl Converter for CocoConverter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::{image_download_key, DatasetMetadata};
+    use crate::parser::{image_download_key, parse_ndjson, DatasetMetadata};
     use serde_json::json;
 
     #[test]
@@ -448,30 +448,12 @@ mod tests {
 
     #[test]
     fn categories_cover_every_annotation_category_id() {
-        let image = |file: &str, split: &str, class_id: i32| ImageEntry {
-            r#type: "image".to_string(),
-            file: file.to_string(),
-            output_file: None,
-            url: String::new(),
-            width: 640,
-            height: 480,
-            split: split.to_string(),
-            annotations: Some(json!({ "boxes": [[class_id, 0.5, 0.5, 0.2, 0.2]] })),
-        };
-        let data = NDJSONData {
-            metadata: DatasetMetadata {
-                r#type: "dataset".to_string(),
-                task: "detect".to_string(),
-                name: "test".to_string(),
-                description: String::new(),
-                bytes: 0,
-                url: String::new(),
-                class_names: HashMap::from([("0".to_string(), "cat".to_string())]),
-                kpt_shape: None,
-                version: "1".to_string(),
-            },
-            images: vec![image("a.jpg", "train", 0), image("b.jpg", "val", 3)],
-        };
+        let data = parse_ndjson(
+            r#"{"type":"dataset","task":"detect","name":"test","class_names":{"0":"cat"}}
+{"type":"image","file":"a.jpg","width":640,"height":480,"split":"train","annotations":{"boxes":[[0,0.5,0.5,0.2,0.2]]}}
+{"type":"image","file":"b.jpg","width":640,"height":480,"split":"val","annotations":{"boxes":[[3,0.5,0.5,0.2,0.2]]}}"#,
+        )
+        .unwrap();
 
         let files = CocoConverter::new().convert(&data, &HashMap::new());
 

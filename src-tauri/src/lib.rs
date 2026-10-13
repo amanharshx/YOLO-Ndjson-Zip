@@ -2,7 +2,7 @@ mod converter;
 mod downloader;
 mod parser;
 
-use converter::{get_converter, pin_class_range};
+use converter::{get_class_list, get_converter};
 use downloader::{DownloadResult, Downloader, FailureSummary, ProgressEvent};
 use parser::{normalize_split, parse_ndjson, ImageEntry, NDJSONData, ParseError};
 use serde::Serialize;
@@ -247,7 +247,15 @@ fn filter_images_without_downloads(
         return 0;
     }
 
-    pin_class_range(data);
+    // Keep classes used only by images about to be dropped.
+    let class_list = get_class_list(data);
+    if let Some(name) = class_list.last() {
+        let max_id = class_list.len() - 1;
+        data.metadata
+            .class_names
+            .insert(max_id.to_string(), name.clone());
+    }
+
     let original_image_count = data.images.len();
     data.images
         .retain(|image| downloaded_images.contains_key(&parser::image_entry_download_key(image)));

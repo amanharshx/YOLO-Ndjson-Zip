@@ -41,8 +41,10 @@ pub fn class_name(class_names: &HashMap<i32, String>, id: i32) -> String {
         .unwrap_or_else(|| format!("class{}", id))
 }
 
-fn max_class_id(data: &NDJSONData, class_names: &HashMap<i32, String>) -> Option<i32> {
-    class_names
+/// Class names for IDs 0..=max(class_names key, annotation class ID).
+pub fn get_class_list(data: &NDJSONData) -> Vec<String> {
+    let class_names = get_class_names(data);
+    let max_id = class_names
         .keys()
         .copied()
         .chain(
@@ -50,25 +52,11 @@ fn max_class_id(data: &NDJSONData, class_names: &HashMap<i32, String>) -> Option
                 .iter()
                 .flat_map(ImageEntry::annotation_class_ids),
         )
-        .max()
-}
+        .max();
 
-/// Class names for IDs 0..=max(class_names key, annotation class ID).
-pub fn get_class_list(data: &NDJSONData) -> Vec<String> {
-    let class_names = get_class_names(data);
-    match max_class_id(data, &class_names) {
+    match max_id {
         Some(max_id) => (0..=max_id).map(|i| class_name(&class_names, i)).collect(),
         None => Vec::new(),
-    }
-}
-
-/// Records the highest class ID in `class_names` so dropping images later can't shrink the class list.
-pub fn pin_class_range(data: &mut NDJSONData) {
-    let class_names = get_class_names(data);
-    if let Some(max_id) = max_class_id(data, &class_names) {
-        data.metadata
-            .class_names
-            .insert(max_id.to_string(), class_name(&class_names, max_id));
     }
 }
 
