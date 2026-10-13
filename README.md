@@ -67,12 +67,14 @@
 | YOLOv7 | ✅ | Detection |
 | YOLOv5 | ✅ | Detection, Segmentation, Classification |
 | YOLO Darknet | ✅ | Detection, Classification |
-| COCO JSON | ✅ | Detection, Segmentation, Pose |
-| Pascal VOC XML | ✅ | Detection, Segmentation, Classification |
+| COCO JSON | ✅ | Detection, Segmentation, Semantic, Pose, OBB |
+| Pascal VOC XML | ✅ | Detection, Segmentation (boxes only), Semantic (boxes only), Classification |
 | CreateML JSON | 🔜 | Detection, Classification |
 | TFRecord | 🔜 | Detection |
 
-> **Note on Semantic Segmentation:** Semantic datasets are exported as **polygon segmentation labels** (identical in shape to instance-segmentation polygons). Only **YOLO26** trains them *as semantic* (omit `masks_dir` so the loader rasterizes polygons → dense masks). Other YOLO versions, COCO, and Pascal VOC can still use the exported polygons as **instance-segmentation annotations**. Formats that cannot represent polygons (YOLO Darknet, CreateML, TFRecord) are rejected for semantic datasets.
+> **Note on Semantic Segmentation:** Semantic datasets are exported as **polygon segmentation labels** (identical in shape to instance-segmentation polygons). Only **YOLO26** trains them *as semantic* (omit `masks_dir` so the loader rasterizes polygons → dense masks). Other YOLO versions and COCO can still use the exported polygons as **instance-segmentation annotations**; Pascal VOC keeps only their bounding boxes.
+
+> **Note on unsupported combinations:** A task the chosen format can't represent (for example COCO + Classification or YOLO Darknet + Segmentation) is rejected before any image downloads, and the error lists the formats that support it. Depth datasets are not supported yet.
 
 ---
 
