@@ -70,11 +70,11 @@ pub struct CocoConverter;
 
 /// Shoelace area of a flat `[x0, y0, x1, y1, ...]` polygon, independent of winding order.
 fn polygon_area(flat_points: &[f64]) -> f64 {
-    let points: Vec<&[f64]> = flat_points.chunks_exact(2).collect();
+    let (points, _) = flat_points.as_chunks::<2>();
     let twice_signed_area: f64 = points
         .iter()
         .zip(points.iter().cycle().skip(1))
-        .map(|(a, b)| a[0] * b[1] - b[0] * a[1])
+        .map(|([x0, y0], [x1, y1])| x0 * y1 - x1 * y0)
         .sum();
     twice_signed_area.abs() / 2.0
 }
