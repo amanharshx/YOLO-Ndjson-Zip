@@ -57,16 +57,8 @@ impl PascalVocConverter {
         Self::write_element(&mut writer, "depth", "3");
         writer.write_event(Event::End(BytesEnd::new("size"))).ok();
 
-        // segmented flag
-        Self::write_element(
-            &mut writer,
-            "segmented",
-            if task == "segment" || task == "semantic" {
-                "1"
-            } else {
-                "0"
-            },
-        );
+        // No mask PNGs are exported, so never claim segmentation.
+        Self::write_element(&mut writer, "segmented", "0");
 
         if task == "obb" {
             // OBB: derive axis-aligned bounding boxes from oriented corners
@@ -276,7 +268,7 @@ impl Converter for PascalVocConverter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::{image_download_key, DatasetMetadata};
+    use crate::parser::{image_download_key, parse_ndjson, DatasetMetadata};
     use serde_json::json;
 
     #[test]
@@ -365,6 +357,27 @@ mod tests {
 
         assert!(xml.contains("<name>cat</name>"));
         assert!(xml.contains("<name>class2</name>"));
+    }
+
+    #[test]
+    fn xml_never_claims_segmentation_masks() {
+        for (task, annotations) in [
+            ("detect", r#"{"boxes":[[0,0.5,0.5,0.2,0.2]]}"#),
+            ("segment", r#"{"segments":[[0,0.1,0.1,0.5,0.1,0.3,0.5]]}"#),
+            ("semantic", r#"{"segments":[[0,0.1,0.1,0.5,0.1,0.3,0.5]]}"#),
+        ] {
+            let data = parse_ndjson(&format!(
+                r#"{{"type":"dataset","task":"{task}","name":"test","class_names":{{"0":"car"}}}}
+{{"type":"image","file":"a.jpg","width":640,"height":480,"split":"train","annotations":{annotations}}}"#
+            ))
+            .unwrap();
+
+            let files = PascalVocConverter::new().convert(&data, &HashMap::new());
+            let xml = std::str::from_utf8(&files["train/a.xml"]).unwrap();
+
+            assert!(xml.contains("<segmented>0</segmented>"), "{task}");
+            assert!(xml.contains("<object>"), "{task}");
+        }
     }
 
     #[test]
