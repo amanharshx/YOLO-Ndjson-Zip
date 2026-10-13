@@ -2,7 +2,7 @@ mod converter;
 mod downloader;
 mod parser;
 
-use converter::get_converter;
+use converter::{get_converter, pin_class_range};
 use downloader::{DownloadResult, Downloader, FailureSummary, ProgressEvent};
 use parser::{normalize_split, parse_ndjson, ImageEntry, NDJSONData, ParseError};
 use serde::Serialize;
@@ -247,6 +247,7 @@ fn filter_images_without_downloads(
         return 0;
     }
 
+    pin_class_range(data);
     let original_image_count = data.images.len();
     data.images
         .retain(|image| downloaded_images.contains_key(&parser::image_entry_download_key(image)));
@@ -474,7 +475,7 @@ mod tests {
         semantic_dataset_has_no_polygons, semantic_format_supported, short_stable_hash,
         validate_downloaded_image_count, validate_pose_dataset, ConvertErrorKind, MAX_NDJSON_BYTES,
     };
-    use crate::converter::get_converter;
+    use crate::converter::{get_class_list, get_converter};
     use crate::downloader::{FailureGroup, FailureKind, FailureSummary};
     use crate::parser::{image_entry_download_key, parse_ndjson};
     use std::collections::HashMap;
@@ -502,6 +503,25 @@ mod tests {
         assert_eq!(omitted, 1);
         assert_eq!(data.images.len(), 1);
         assert_eq!(data.images[0].file, "present.jpg");
+    }
+
+    #[test]
+    fn filtering_keeps_classes_used_only_by_omitted_images() {
+        let mut data = parse_ndjson(
+            r#"{"type":"dataset","task":"detect","name":"partial"}
+{"type":"image","file":"present.jpg","width":640,"height":480,"split":"train","url":"https://cdn.example/present.jpg","annotations":{"boxes":[[0,0.5,0.5,0.2,0.2]]}}
+{"type":"image","file":"missing.jpg","width":640,"height":480,"split":"train","url":"","annotations":{"boxes":[[2,0.5,0.5,0.2,0.2]]}}"#,
+        )
+        .unwrap();
+        let downloaded = HashMap::from([(
+            image_entry_download_key(&data.images[0]),
+            b"present-image".to_vec(),
+        )]);
+
+        filter_images_without_downloads(&mut data, &downloaded, true);
+
+        assert_eq!(data.images.len(), 1);
+        assert_eq!(get_class_list(&data), vec!["class0", "class1", "class2"]);
     }
 
     #[test]

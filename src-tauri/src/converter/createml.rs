@@ -1,4 +1,4 @@
-use super::{get_class_names, Converter};
+use super::{class_name, get_class_names, Converter};
 use crate::parser::{image_download_key, ImageEntry, NDJSONData};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -49,21 +49,14 @@ impl CreateMlConverter {
                 let annotations = img
                     .get_bboxes()
                     .iter()
-                    .map(|bbox| {
-                        let class_name = class_names
-                            .get(&bbox.class_id)
-                            .cloned()
-                            .unwrap_or_else(|| format!("class_{}", bbox.class_id));
-
-                        CreateMlAnnotation {
-                            label: class_name,
-                            coordinates: CreateMlCoordinates {
-                                x: bbox.x * img.width as f64,
-                                y: bbox.y * img.height as f64,
-                                width: bbox.width * img.width as f64,
-                                height: bbox.height * img.height as f64,
-                            },
-                        }
+                    .map(|bbox| CreateMlAnnotation {
+                        label: class_name(class_names, bbox.class_id),
+                        coordinates: CreateMlCoordinates {
+                            x: bbox.x * img.width as f64,
+                            y: bbox.y * img.height as f64,
+                            width: bbox.width * img.width as f64,
+                            height: bbox.height * img.height as f64,
+                        },
                     })
                     .collect();
 
@@ -90,11 +83,6 @@ impl CreateMlConverter {
                     .get_obb_annotations()
                     .iter()
                     .map(|obb| {
-                        let class_name = class_names
-                            .get(&obb.class_id)
-                            .cloned()
-                            .unwrap_or_else(|| format!("class_{}", obb.class_id));
-
                         // Derive axis-aligned bbox from OBB corners
                         let xs: Vec<f64> = obb.points.iter().map(|(x, _)| *x).collect();
                         let ys: Vec<f64> = obb.points.iter().map(|(_, y)| *y).collect();
@@ -108,7 +96,7 @@ impl CreateMlConverter {
                         let h = (max_y - min_y) * img.height as f64;
 
                         CreateMlAnnotation {
-                            label: class_name,
+                            label: class_name(class_names, obb.class_id),
                             coordinates: CreateMlCoordinates {
                                 x: cx,
                                 y: cy,
@@ -143,11 +131,6 @@ impl CreateMlConverter {
                     .iter()
                     .filter(|seg| !seg.points.is_empty())
                     .map(|seg| {
-                        let class_name = class_names
-                            .get(&seg.class_id)
-                            .cloned()
-                            .unwrap_or_else(|| format!("class_{}", seg.class_id));
-
                         // Derive axis-aligned bbox from polygon vertices
                         let xs: Vec<f64> = seg.points.iter().map(|(x, _)| *x).collect();
                         let ys: Vec<f64> = seg.points.iter().map(|(_, y)| *y).collect();
@@ -161,7 +144,7 @@ impl CreateMlConverter {
                         let h = (max_y - min_y) * img.height as f64;
 
                         CreateMlAnnotation {
-                            label: class_name,
+                            label: class_name(class_names, seg.class_id),
                             coordinates: CreateMlCoordinates {
                                 x: cx,
                                 y: cy,
@@ -193,13 +176,9 @@ impl CreateMlConverter {
             .filter_map(|img| {
                 let classifications = img.get_classifications();
                 let class_id = classifications.first()?;
-                let class_name = class_names
-                    .get(class_id)
-                    .cloned()
-                    .unwrap_or_else(|| format!("class_{}", class_id));
                 Some(CreateMlClassification {
                     image: img.effective_file_name().to_string(),
-                    label: class_name,
+                    label: class_name(class_names, *class_id),
                 })
             })
             .collect();
