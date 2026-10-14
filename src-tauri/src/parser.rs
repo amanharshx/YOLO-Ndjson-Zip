@@ -132,6 +132,13 @@ pub fn normalize_split(split: &str) -> &str {
     }
 }
 
+/// The name an image's label, XML, or other per-image output file is built from.
+pub fn output_stem(file_name: &str) -> &str {
+    file_name
+        .rsplit_once('.')
+        .map_or(file_name, |(stem, _)| stem)
+}
+
 pub fn image_download_key(split: &str, file: &str) -> String {
     let split = normalize_split(split);
     format!("{}:{}:{}", split.len(), split, file)

@@ -1,5 +1,5 @@
 use super::{class_name, get_class_names, Converter};
-use crate::parser::{image_download_key, ImageEntry, NDJSONData};
+use crate::parser::{image_download_key, output_stem, ImageEntry, NDJSONData};
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 use std::collections::HashMap;
@@ -243,10 +243,7 @@ impl Converter for PascalVocConverter {
                 for img in images.iter() {
                     let image_file = img.effective_file_name();
                     let xml_content = self.create_voc_xml(img, &class_names, task);
-                    let xml_filename = image_file
-                        .rsplit_once('.')
-                        .map(|(name, _)| name)
-                        .unwrap_or(image_file);
+                    let xml_filename = output_stem(image_file);
                     files.insert(
                         format!("{}/{}.xml", split, xml_filename),
                         xml_content.into_bytes(),

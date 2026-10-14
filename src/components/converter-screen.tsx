@@ -345,6 +345,16 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
                     {downloadMessage && (
                       <DownloadFailureDetails message={downloadMessage} />
                     )}
+                    {result.renamed_images > 0 && (
+                      <p
+                        data-testid="renamed-images"
+                        className="mt-3 text-left text-xs text-muted-foreground"
+                      >
+                        {result.renamed_images === 1
+                          ? "Renamed 1 image whose file name clashed within a split."
+                          : `Renamed ${result.renamed_images} images whose file names clashed within a split.`}
+                      </p>
+                    )}
                     <Button
                       onClick={() => revealItemInDir(result.zip_path)}
                       variant="outline"

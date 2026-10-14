@@ -1,5 +1,5 @@
 use super::{class_name, get_class_list, get_class_names, Converter};
-use crate::parser::{image_download_key, ImageEntry, NDJSONData};
+use crate::parser::{image_download_key, output_stem, ImageEntry, NDJSONData};
 use std::collections::HashMap;
 
 pub struct YoloConverter {
@@ -242,11 +242,7 @@ impl Converter for YoloConverter {
                     _ => self.create_detection_label(img),
                 };
 
-                let label_filename = img
-                    .effective_file_name()
-                    .rsplit_once('.')
-                    .map(|(name, _)| name)
-                    .unwrap_or(image_file);
+                let label_filename = output_stem(image_file);
 
                 if self.darknet {
                     // Darknet: flat structure, images + labels side by side in {split}/
