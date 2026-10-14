@@ -7,6 +7,11 @@ use crate::parser::{ImageEntry, NDJSONData};
 use std::collections::HashMap;
 
 pub trait Converter {
+    /// Whether `convert` writes pixel coordinates for `task`, so every image needs a size.
+    fn needs_image_sizes(&self, _task: &str) -> bool {
+        false
+    }
+
     fn convert(
         &self,
         data: &NDJSONData,
@@ -108,6 +113,13 @@ pub fn class_name(class_names: &HashMap<i32, String>, id: i32) -> String {
         .get(&id)
         .cloned()
         .unwrap_or_else(|| format!("class{}", id))
+}
+
+/// Pixel size for converters whose `needs_image_sizes` is true; `resolve_image_sizes`
+/// fills or rejects every missing size before they run.
+pub fn image_size(img: &ImageEntry) -> (i32, i32) {
+    img.size()
+        .expect("image sizes are resolved before a size-dependent conversion")
 }
 
 /// Class names for IDs 0..=max(class_names key, annotation class ID).
@@ -297,8 +309,8 @@ mod tests {
                 file: "a.jpg".to_string(),
                 output_file: None,
                 url: String::new(),
-                width: 640,
-                height: 480,
+                width: Some(640),
+                height: Some(480),
                 split: "train".to_string(),
                 annotations: Some(annotations.clone()),
             });

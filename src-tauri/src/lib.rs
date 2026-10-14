@@ -2,7 +2,7 @@ mod converter;
 mod downloader;
 mod parser;
 
-use converter::{check_task_format, get_class_list, get_converter};
+use converter::{check_task_format, get_class_list, get_converter, Converter};
 use downloader::{DownloadResult, Downloader, FailureSummary, ProgressEvent};
 use parser::{normalize_split, output_stem, parse_ndjson, ImageEntry, NDJSONData, ParseError};
 use serde::Serialize;
@@ -197,6 +197,59 @@ fn validate_semantic_polygons(data: &NDJSONData) -> Result<(), String> {
     ))
 }
 
+/// For converters that write pixel coordinates, keeps declared sizes and reads missing ones
+/// from the downloaded image header, or rejects them when no images are exported.
+fn resolve_image_sizes(
+    data: &mut NDJSONData,
+    converter: &dyn Converter,
+    downloaded_images: &HashMap<String, Vec<u8>>,
+    include_images: bool,
+) -> Result<(), String> {
+    if !converter.needs_image_sizes(&data.metadata.task) {
+        return Ok(());
+    }
+    if !include_images {
+        let mut sizeless = data.images.iter().filter(|image| image.size().is_none());
+        return match sizeless.next() {
+            None => Ok(()),
+            Some(first) => Err(format!(
+                "Width/height missing on {} of {} image lines (first: '{}'). \
+                 Include images in the export so sizes can be read from them.",
+                1 + sizeless.count(),
+                data.images.len(),
+                first.file
+            )),
+        };
+    }
+    for image in data
+        .images
+        .iter_mut()
+        .filter(|image| image.size().is_none())
+    {
+        let (width, height) = downloaded_images
+            .get(&parser::image_entry_download_key(image))
+            .ok_or("it was not downloaded")
+            .and_then(|bytes| {
+                let size = imagesize::blob_size(bytes).map_err(|_| {
+                    "the file is not a recognised image; add width/height to its NDJSON line"
+                })?;
+                match (i32::try_from(size.width), i32::try_from(size.height)) {
+                    (Ok(width), Ok(height)) => Ok((width, height)),
+                    _ => Err("size out of range"),
+                }
+            })
+            .map_err(|reason| {
+                format!(
+                    "Can't read the pixel size of image '{}': {}",
+                    image.file, reason
+                )
+            })?;
+        image.width.get_or_insert(width);
+        image.height.get_or_insert(height);
+    }
+    Ok(())
+}
+
 fn validate_pose_dataset(data: &mut NDJSONData) -> Result<(), ParseError> {
     if data.metadata.task != "pose" {
         return Ok(());
@@ -351,13 +404,17 @@ async fn convert_ndjson(
         kept_image_count,
         &download_result.failure_summary,
     )?;
+    let converter = get_converter(&format).ok_or_else(|| format!("Unknown format: {}", format))?;
+    resolve_image_sizes(
+        &mut data,
+        converter.as_ref(),
+        &download_result.files,
+        include_images,
+    )?;
     let DownloadResult {
         files: downloaded_images,
         failure_summary,
     } = download_result;
-
-    // Get converter
-    let converter = get_converter(&format).ok_or_else(|| format!("Unknown format: {}", format))?;
 
     // Convert
     channel
@@ -467,9 +524,9 @@ pub fn run() {
 mod tests {
     use super::{
         file_name_with_suffix, filter_images_without_downloads, is_ndjson_size_allowed,
-        normalize_zip_path, prepare_images_with_unique_output_names, short_stable_hash,
-        validate_downloaded_image_count, validate_pose_dataset, validate_semantic_polygons,
-        ConvertErrorKind, MAX_NDJSON_BYTES,
+        normalize_zip_path, prepare_images_with_unique_output_names, resolve_image_sizes,
+        short_stable_hash, validate_downloaded_image_count, validate_pose_dataset,
+        validate_semantic_polygons, ConvertErrorKind, MAX_NDJSON_BYTES,
     };
     use crate::converter::{get_class_list, get_converter};
     use crate::downloader::{FailureGroup, FailureKind, FailureSummary};
@@ -882,5 +939,270 @@ mod tests {
         assert!(!first.contains("<name>dog</name>"));
         assert!(second.contains(&format!("<filename>{renamed}</filename>")));
         assert!(second.contains("<name>dog</name>") && !second.contains("<name>cat</name>"));
+    }
+
+    /// Detect dataset whose image lines declare no `width`/`height`.
+    fn sizeless_detect_data() -> crate::parser::NDJSONData {
+        parse_ndjson(
+            r#"{"type":"dataset","task":"detect","name":"sizeless","class_names":{"0":"cat"}}
+{"file":"a.jpg","split":"train","url":"https://cdn.example/a.jpg","annotations":{"boxes":[[0,0.5,0.5,0.5,0.5]]}}
+{"file":"b.png","split":"val","url":"https://cdn.example/b.png","annotations":{"boxes":[[0,0.25,0.25,0.5,0.5]]}}"#,
+        )
+        .unwrap()
+    }
+
+    fn downloads_for(
+        data: &crate::parser::NDJSONData,
+        bytes: [Vec<u8>; 2],
+    ) -> HashMap<String, Vec<u8>> {
+        data.images
+            .iter()
+            .map(image_entry_download_key)
+            .zip(bytes)
+            .collect()
+    }
+
+    #[test]
+    fn yolo_formats_export_without_sizes_with_or_without_images() {
+        for (format, label) in [
+            ("yolo", "train/labels/a.txt"),
+            ("yolo_darknet", "train/a.txt"),
+        ] {
+            for include_images in [false, true] {
+                let mut data = sizeless_detect_data();
+                let downloaded = if include_images {
+                    downloads_for(&data, [b"not-an-image".to_vec(), b"x".to_vec()])
+                } else {
+                    HashMap::new()
+                };
+
+                let converter = get_converter(format).unwrap();
+                resolve_image_sizes(&mut data, converter.as_ref(), &downloaded, include_images)
+                    .unwrap();
+                let files = converter.convert(&data, &downloaded);
+
+                assert_eq!(
+                    files.get(label).map(Vec::as_slice),
+                    Some(&b"0 0.500000 0.500000 0.500000 0.500000"[..]),
+                    "{format}, include_images={include_images}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn labels_only_pixel_formats_reject_missing_sizes_naming_count_and_first_file() {
+        for format in ["coco", "pascal_voc"] {
+            let mut data = sizeless_detect_data();
+
+            let converter = get_converter(format).unwrap();
+            let error = resolve_image_sizes(&mut data, converter.as_ref(), &HashMap::new(), false)
+                .unwrap_err();
+
+            assert_eq!(
+                error,
+                "Width/height missing on 2 of 2 image lines (first: 'a.jpg'). \
+                 Include images in the export so sizes can be read from them.",
+                "{format}"
+            );
+        }
+    }
+
+    fn crc32(bytes: &[u8]) -> u32 {
+        !bytes.iter().fold(!0u32, |crc, &byte| {
+            (0..8).fold(crc ^ u32::from(byte), |crc, _| {
+                (crc >> 1) ^ (0xEDB8_8320 & (crc & 1).wrapping_neg())
+            })
+        })
+    }
+
+    /// A complete 8-bit grayscale PNG (stored deflate block, so no compressor is needed).
+    fn png_bytes(width: u16, height: u16) -> Vec<u8> {
+        let chunk = |kind: &[u8], body: &[u8]| {
+            let typed = [kind, body].concat();
+            [
+                &(body.len() as u32).to_be_bytes()[..],
+                &typed,
+                &crc32(&typed).to_be_bytes(),
+            ]
+            .concat()
+        };
+        let row = [&[0u8][..], &vec![0x80; usize::from(width)]].concat();
+        let pixels = row.repeat(usize::from(height));
+        let (a, b) = pixels.iter().fold((1u32, 0u32), |(a, b), &byte| {
+            let a = (a + u32::from(byte)) % 65521;
+            (a, (b + a) % 65521)
+        });
+        let len = pixels.len() as u16;
+        let zlib = [
+            &[0x78, 0x01, 0x01][..],
+            &len.to_le_bytes(),
+            &(!len).to_le_bytes(),
+            &pixels,
+            &((b << 16) | a).to_be_bytes(),
+        ]
+        .concat();
+        let header = [
+            &u32::from(width).to_be_bytes()[..],
+            &u32::from(height).to_be_bytes(),
+            &[8, 0, 0, 0, 0],
+        ]
+        .concat();
+        [
+            &b"\x89PNG\r\n\x1a\n"[..],
+            &chunk(b"IHDR", &header),
+            &chunk(b"IDAT", &zlib),
+            &chunk(b"IEND", &[]),
+        ]
+        .concat()
+    }
+
+    /// A complete baseline grayscale JPEG of flat gray: every 8x8 block codes DC 0 then EOB.
+    fn jpeg_bytes(width: u16, height: u16) -> Vec<u8> {
+        let one_symbol_table = |class: u8| {
+            let mut segment = vec![0xFF, 0xC4, 0, 20, class, 1];
+            segment.extend([0; 15]);
+            segment.push(0);
+            segment
+        };
+        let blocks = usize::from(width.div_ceil(8)) * usize::from(height.div_ceil(8));
+        let bits = 2 * blocks;
+        let mut scan = vec![0u8; bits.div_ceil(8)];
+        if bits % 8 != 0 {
+            *scan.last_mut().unwrap() = 0xFF >> (bits % 8); // pad with 1 bits
+        }
+        [
+            &[0xFF, 0xD8, 0xFF, 0xDB, 0, 67, 0][..],
+            &[1; 64],
+            &[0xFF, 0xC0, 0, 11, 8],
+            &height.to_be_bytes(),
+            &width.to_be_bytes(),
+            &[1, 1, 0x11, 0],
+            &one_symbol_table(0x00),
+            &one_symbol_table(0x10),
+            &[0xFF, 0xDA, 0, 8, 1, 1, 0x00, 0, 63, 0],
+            &scan,
+            &[0xFF, 0xD9],
+        ]
+        .concat()
+    }
+
+    fn coco_json(files: &HashMap<String, Vec<u8>>, split: &str) -> serde_json::Value {
+        serde_json::from_slice(&files[&format!("{split}/_annotations.coco.json")]).unwrap()
+    }
+
+    #[test]
+    fn coco_with_images_reads_missing_sizes_from_jpeg_and_png_headers() {
+        let mut data = sizeless_detect_data();
+        let downloaded = downloads_for(&data, [jpeg_bytes(100, 60), png_bytes(40, 30)]);
+
+        let converter = get_converter("coco").unwrap();
+        resolve_image_sizes(&mut data, converter.as_ref(), &downloaded, true).unwrap();
+        let files = converter.convert(&data, &downloaded);
+
+        let train = coco_json(&files, "train");
+        assert_eq!(
+            (&train["images"][0]["width"], &train["images"][0]["height"]),
+            (&serde_json::json!(100), &serde_json::json!(60))
+        );
+        assert_eq!(
+            train["annotations"][0]["bbox"],
+            serde_json::json!([25.0, 15.0, 50.0, 30.0])
+        );
+        let valid = coco_json(&files, "valid");
+        assert_eq!(
+            (&valid["images"][0]["width"], &valid["images"][0]["height"]),
+            (&serde_json::json!(40), &serde_json::json!(30))
+        );
+        assert_eq!(
+            valid["annotations"][0]["bbox"],
+            serde_json::json!([0.0, 0.0, 20.0, 15.0])
+        );
+    }
+
+    #[test]
+    fn voc_with_images_reads_missing_sizes_from_jpeg_and_png_headers() {
+        let mut data = sizeless_detect_data();
+        let downloaded = downloads_for(&data, [jpeg_bytes(100, 60), png_bytes(40, 30)]);
+
+        let converter = get_converter("pascal_voc").unwrap();
+        resolve_image_sizes(&mut data, converter.as_ref(), &downloaded, true).unwrap();
+        let files = converter.convert(&data, &downloaded);
+
+        let xml = |path: &str| String::from_utf8(files[path].clone()).unwrap();
+        let train = xml("train/a.xml");
+        assert!(train.contains("<width>100</width>") && train.contains("<height>60</height>"));
+        assert!(train.contains(
+            "<xmin>25</xmin>\n      <ymin>15</ymin>\n      <xmax>75</xmax>\n      <ymax>45</ymax>"
+        ));
+        let valid = xml("valid/b.xml");
+        assert!(valid.contains("<width>40</width>") && valid.contains("<height>30</height>"));
+        assert!(valid.contains(
+            "<xmin>0</xmin>\n      <ymin>0</ymin>\n      <xmax>20</xmax>\n      <ymax>15</ymax>"
+        ));
+    }
+
+    #[test]
+    fn unreadable_image_without_declared_size_fails_pixel_formats_naming_the_file() {
+        for format in ["coco", "pascal_voc"] {
+            let mut data = sizeless_detect_data();
+            let downloaded = downloads_for(&data, [jpeg_bytes(100, 60), b"<html>".to_vec()]);
+
+            let converter = get_converter(format).unwrap();
+            let error =
+                resolve_image_sizes(&mut data, converter.as_ref(), &downloaded, true).unwrap_err();
+
+            assert_eq!(
+                error,
+                "Can't read the pixel size of image 'b.png': the file is not a recognised \
+                 image; add width/height to its NDJSON line",
+                "{format}"
+            );
+        }
+    }
+
+    #[test]
+    fn declared_sizes_are_used_unchanged_without_reading_images() {
+        let mut data = parse_ndjson(
+            r#"{"type":"dataset","task":"detect","name":"sized","class_names":{"0":"cat"}}
+{"file":"a.jpg","width":200,"height":100,"split":"train","url":"https://cdn.example/a.jpg","annotations":{"boxes":[[0,0.5,0.5,0.5,0.5]]}}"#,
+        )
+        .unwrap();
+        let downloaded = HashMap::from([(
+            image_entry_download_key(&data.images[0]),
+            jpeg_bytes(100, 60),
+        )]);
+
+        let converter = get_converter("coco").unwrap();
+        resolve_image_sizes(&mut data, converter.as_ref(), &downloaded, true).unwrap();
+        let files = converter.convert(&data, &downloaded);
+
+        let train = coco_json(&files, "train");
+        assert_eq!(
+            (&train["images"][0]["width"], &train["images"][0]["height"]),
+            (&serde_json::json!(200), &serde_json::json!(100))
+        );
+        assert_eq!(
+            train["annotations"][0]["bbox"],
+            serde_json::json!([50.0, 25.0, 100.0, 50.0])
+        );
+        let voc = get_converter("pascal_voc").unwrap();
+        assert!(resolve_image_sizes(&mut data, voc.as_ref(), &HashMap::new(), false).is_ok());
+    }
+
+    #[test]
+    fn classify_exports_never_need_sizes() {
+        for format in ["pascal_voc", "createml"] {
+            let mut data = parse_ndjson(
+                r#"{"type":"dataset","task":"classify","name":"pets","class_names":{"0":"cat"}}
+{"file":"a.jpg","split":"train","annotations":{"classification":[0]}}"#,
+            )
+            .unwrap();
+            let converter = get_converter(format).unwrap();
+
+            resolve_image_sizes(&mut data, converter.as_ref(), &HashMap::new(), false).unwrap();
+
+            converter.convert(&data, &HashMap::new());
+        }
     }
 }

@@ -31,6 +31,7 @@ thiserror = "2"
 chrono = { version = "0.4", features = ["serde"] }
 sentry = "0.46.1"
 url = "2"
+imagesize = "0.15"
 
 [profile.release]
 strip = true

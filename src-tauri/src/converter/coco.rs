@@ -1,4 +1,4 @@
-use super::{get_class_list, Converter};
+use super::{get_class_list, image_size, Converter};
 use crate::parser::{image_download_key, ImageEntry, NDJSONData};
 use chrono::Utc;
 use serde::Serialize;
@@ -138,12 +138,13 @@ impl CocoConverter {
 
         for (img_idx, img) in images.iter().enumerate() {
             let img_id = (img_idx + 1) as i32;
+            let (width, height) = image_size(img);
 
             coco.images.push(CocoImage {
                 id: img_id,
                 file_name: img.effective_file_name().to_string(),
-                width: img.width,
-                height: img.height,
+                width,
+                height,
                 license: 1,
                 date_captured: now.to_rfc3339(),
             });
@@ -161,8 +162,8 @@ impl CocoConverter {
                         let mut max_y = f64::MIN;
 
                         for (x, y) in &seg.points {
-                            let abs_x = x * img.width as f64;
-                            let abs_y = y * img.height as f64;
+                            let abs_x = x * width as f64;
+                            let abs_y = y * height as f64;
                             abs_points.push(abs_x);
                             abs_points.push(abs_y);
                             min_x = min_x.min(abs_x);
@@ -190,16 +191,16 @@ impl CocoConverter {
                 }
                 "pose" => {
                     for pose in img.get_pose_annotations(kpt_dims) {
-                        let x_min = (pose.bbox_x - pose.bbox_w / 2.0) * img.width as f64;
-                        let y_min = (pose.bbox_y - pose.bbox_h / 2.0) * img.height as f64;
-                        let w = pose.bbox_w * img.width as f64;
-                        let h = pose.bbox_h * img.height as f64;
+                        let x_min = (pose.bbox_x - pose.bbox_w / 2.0) * width as f64;
+                        let y_min = (pose.bbox_y - pose.bbox_h / 2.0) * height as f64;
+                        let w = pose.bbox_w * width as f64;
+                        let h = pose.bbox_h * height as f64;
 
                         let mut kps = Vec::with_capacity(pose.num_keypoints() * 3);
                         let mut visible_count = 0;
                         for keypoint in pose.keypoints.chunks_exact(pose.dims) {
-                            let abs_x = keypoint[0] * img.width as f64;
-                            let abs_y = keypoint[1] * img.height as f64;
+                            let abs_x = keypoint[0] * width as f64;
+                            let abs_y = keypoint[1] * height as f64;
                             let visibility = if pose.dims == 3 {
                                 keypoint[2]
                             } else {
@@ -237,8 +238,8 @@ impl CocoConverter {
                         let mut max_y = f64::MIN;
 
                         for (x, y) in &obb.points {
-                            let abs_x = x * img.width as f64;
-                            let abs_y = y * img.height as f64;
+                            let abs_x = x * width as f64;
+                            let abs_y = y * height as f64;
                             abs_points.push(abs_x);
                             abs_points.push(abs_y);
                             min_x = min_x.min(abs_x);
@@ -267,10 +268,10 @@ impl CocoConverter {
                 _ => {
                     // Detection (default)
                     for bbox in img.get_bboxes() {
-                        let x_min = (bbox.x - bbox.width / 2.0) * img.width as f64;
-                        let y_min = (bbox.y - bbox.height / 2.0) * img.height as f64;
-                        let w = bbox.width * img.width as f64;
-                        let h = bbox.height * img.height as f64;
+                        let x_min = (bbox.x - bbox.width / 2.0) * width as f64;
+                        let y_min = (bbox.y - bbox.height / 2.0) * height as f64;
+                        let w = bbox.width * width as f64;
+                        let h = bbox.height * height as f64;
 
                         coco.annotations.push(CocoAnnotation {
                             id: annotation_id,
@@ -294,6 +295,10 @@ impl CocoConverter {
 }
 
 impl Converter for CocoConverter {
+    fn needs_image_sizes(&self, _task: &str) -> bool {
+        true
+    }
+
     fn convert(
         &self,
         data: &NDJSONData,
@@ -375,8 +380,8 @@ mod tests {
                     file: "img1.jpg".to_string(),
                     output_file: None,
                     url: String::new(),
-                    width: 640,
-                    height: 480,
+                    width: Some(640),
+                    height: Some(480),
                     split: "train".to_string(),
                     annotations: Some(json!({
                         "bboxes": [[0, 0.5, 0.5, 0.2, 0.2]]
@@ -386,8 +391,8 @@ mod tests {
                     file: "img1.jpg".to_string(),
                     output_file: None,
                     url: String::new(),
-                    width: 640,
-                    height: 480,
+                    width: Some(640),
+                    height: Some(480),
                     split: "val".to_string(),
                     annotations: Some(json!({
                         "bboxes": [[0, 0.4, 0.4, 0.3, 0.3]]
@@ -424,8 +429,8 @@ mod tests {
                 file: "img1.jpg".to_string(),
                 output_file: Some("img1__abcd1234.jpg".to_string()),
                 url: String::new(),
-                width: 640,
-                height: 480,
+                width: Some(640),
+                height: Some(480),
                 split: "train".to_string(),
                 annotations: Some(json!({
                     "boxes": [[0, 0.5, 0.5, 0.2, 0.2]]
@@ -557,8 +562,8 @@ mod tests {
                 file: "pose.jpg".to_string(),
                 output_file: None,
                 url: String::new(),
-                width: 100,
-                height: 200,
+                width: Some(100),
+                height: Some(200),
                 split: "train".to_string(),
                 annotations: Some(json!({
                     "pose": [[0, 0.5, 0.5, 0.4, 0.6, 0.1, 0.2, 0.3, 0.4]]
@@ -596,8 +601,8 @@ mod tests {
                 file: "pose.jpg".to_string(),
                 output_file: None,
                 url: String::new(),
-                width: 100,
-                height: 200,
+                width: Some(100),
+                height: Some(200),
                 split: "train".to_string(),
                 annotations: Some(json!({
                     "pose": [[0, 0.5, 0.5, 0.4, 0.6, 0.1, 0.2, 1, 0.3, 0.4, 2]]
