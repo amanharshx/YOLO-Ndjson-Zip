@@ -23,6 +23,12 @@ pub trait Converter {
         false
     }
 
+    /// Whether `convert` writes each image's depth map for `task`, so every image needs a
+    /// depth URL and is kept only with its depth map.
+    fn pairs_depth_maps(&self, _task: &str) -> bool {
+        false
+    }
+
     fn convert(
         &self,
         data: &NDJSONData,
@@ -67,13 +73,14 @@ fn format_label(id: &str) -> Option<&'static str> {
 }
 
 /// Task × format matrix: the UI formats that can represent each exportable task.
-const TASK_FORMATS: [(&str, &[&str]); 6] = [
+const TASK_FORMATS: [(&str, &[&str]); 7] = [
     ("detect", &["yolo", "yolo_darknet", "coco", "pascal_voc"]),
     ("segment", &["yolo", "coco", "pascal_voc"]),
     ("semantic", &["yolo", "coco", "pascal_voc"]),
     ("pose", &["yolo", "coco"]),
     ("obb", &["yolo", "coco"]),
     ("classify", &["yolo", "yolo_darknet", "pascal_voc"]),
+    ("depth", &["yolo"]),
 ];
 
 /// Rejects a task the chosen format can't represent, before anything is downloaded.
@@ -84,9 +91,6 @@ pub fn check_task_format(task: &str, format: &str) -> Result<(), String> {
     // existing handling, which only rejected semantic datasets.
     if label.is_none() && task != "semantic" {
         return Ok(());
-    }
-    if task == "depth" {
-        return Err("Depth datasets are not supported yet.".to_string());
     }
     let Some(&(_, supported)) = TASK_FORMATS.iter().find(|(name, _)| *name == task) else {
         let tasks: Vec<&str> = TASK_FORMATS.iter().map(|(name, _)| *name).collect();
@@ -223,6 +227,7 @@ mod tests {
                 class_names,
                 kpt_shape: None,
                 version: "1".to_string(),
+                depth_scale: 1000.0,
             },
             images: vec![],
         }
@@ -251,6 +256,7 @@ mod tests {
                 width: Some(640),
                 height: Some(480),
                 split: "train".to_string(),
+                depth: None,
                 annotations: Some(json!({ "classification": [id] })),
             });
         }
@@ -329,7 +335,7 @@ mod tests {
             ("pose", [true, false, true, false]),
             ("obb", [true, false, true, false]),
             ("classify", [true, true, false, true]),
-            ("depth", [false, false, false, false]),
+            ("depth", [true, false, false, false]),
         ];
 
         for (task, allowed) in matrix {
@@ -358,11 +364,14 @@ mod tests {
     }
 
     #[test]
-    fn depth_is_not_supported_yet_in_any_format() {
-        for format in ["yolo", "yolo_darknet", "coco", "pascal_voc"] {
+    fn depth_is_rejected_by_every_format_but_yolo() {
+        for format in ["yolo_darknet", "coco", "pascal_voc"] {
+            let label = format_label(format).unwrap();
             assert_eq!(
                 check_task_format("depth", format).unwrap_err(),
-                "Depth datasets are not supported yet.",
+                format!(
+                    "{label} can't export 'depth' datasets. Formats that support 'depth': YOLO."
+                ),
                 "{format}"
             );
         }
@@ -373,7 +382,7 @@ mod tests {
         assert_eq!(
             check_task_format("keypoints", "yolo").unwrap_err(),
             "Unsupported task 'keypoints'. \
-             Supported tasks: detect, segment, semantic, pose, obb, classify."
+             Supported tasks: detect, segment, semantic, pose, obb, classify, depth."
         );
     }
 
@@ -450,6 +459,7 @@ mod tests {
                 width: Some(640),
                 height: Some(480),
                 split: "train".to_string(),
+                depth: None,
                 annotations: Some(annotations.clone()),
             });
 

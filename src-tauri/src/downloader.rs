@@ -1,9 +1,11 @@
-use crate::parser::{image_entry_download_key, normalize_split, ImageEntry};
+use crate::parser::{
+    depth_download_key, depth_zip_path, image_entry_download_key, normalize_split, ImageEntry,
+};
 use chrono::{DateTime, Utc};
 use futures::stream::{self, StreamExt};
 use reqwest::{header::RETRY_AFTER, Client, StatusCode};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -59,6 +61,21 @@ pub struct FailureSummary {
 }
 
 impl FailureSummary {
+    /// Counts each image once, under its first failure in a stable order, so an image and its
+    /// depth map failing together count as one image whatever order downloads finish in.
+    fn from_failures(mut failures: Vec<Failure>, expiry: Option<ExpirySummary>) -> Self {
+        failures.sort();
+        failures.dedup_by(|later, first| later.image_key == first.image_key);
+        let mut summary = Self {
+            groups: Vec::new(),
+            expiry,
+        };
+        for failure in &failures {
+            summary.record(failure.kind, &failure.name, failure.http_status);
+        }
+        summary
+    }
+
     fn record(&mut self, kind: FailureKind, file_name: &str, http_status: Option<u16>) {
         // Downloads finish out of order, so keep every serialized collection deterministic.
         let index = match self.groups.binary_search_by_key(&kind, |group| group.kind) {
@@ -91,6 +108,70 @@ impl FailureSummary {
                 Ok(_) => {}
                 Err(index) => group.http_statuses.insert(index, status),
             }
+        }
+    }
+}
+
+/// A failed download, kept until `FailureSummary::from_failures` counts it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Failure {
+    image_key: String,
+    name: String,
+    kind: FailureKind,
+    http_status: Option<u16>,
+}
+
+impl Failure {
+    fn new(request: &DownloadRequest, kind: FailureKind, http_status: Option<u16>) -> Self {
+        Self {
+            image_key: request.image_key.clone(),
+            name: request.name.clone(),
+            kind,
+            http_status,
+        }
+    }
+}
+
+/// One file to download.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadRequest {
+    /// Key its bytes are returned under.
+    pub key: String,
+    /// Download key of the image the file belongs to; failures count once per image.
+    pub image_key: String,
+    /// Where the file goes in the ZIP, shown as download progress.
+    pub label: String,
+    /// Name a failure is reported under.
+    pub name: String,
+    pub url: String,
+}
+
+impl DownloadRequest {
+    pub fn image(image: &ImageEntry) -> Self {
+        let key = image_entry_download_key(image);
+        Self {
+            image_key: key.clone(),
+            key,
+            label: format!(
+                "{}/{}",
+                normalize_split(&image.split),
+                image.effective_file_name()
+            ),
+            name: image.effective_file_name().to_string(),
+            url: image.url.clone(),
+        }
+    }
+
+    /// The depth map paired with `image`, reported under the image's name.
+    pub fn depth_map(image: &ImageEntry) -> Self {
+        let split = normalize_split(&image.split);
+        let file = image.effective_file_name();
+        Self {
+            key: depth_download_key(split, file),
+            image_key: image_entry_download_key(image),
+            label: depth_zip_path(split, file),
+            name: format!("{} (depth map)", file),
+            url: image.depth_url().unwrap_or_default().to_string(),
         }
     }
 }
@@ -325,60 +406,61 @@ impl Downloader {
 
     pub async fn download_all(
         &self,
-        images: &[ImageEntry],
+        requests: &[DownloadRequest],
         channel: &Channel<ProgressEvent>,
     ) -> DownloadResult {
-        let mut failure_summary = FailureSummary::default();
-        let mut images_with_urls = Vec::new();
-        for img in images {
-            if img.url.is_empty() {
-                failure_summary.record(FailureKind::MissingUrl, img.effective_file_name(), None);
+        let mut failures = Vec::new();
+        let mut requests_with_urls = Vec::new();
+        for request in requests {
+            if request.url.is_empty() {
+                failures.push(Failure::new(request, FailureKind::MissingUrl, None));
             } else {
-                let split = normalize_split(&img.split);
-                let item_label = format!("{}/{}", split, img.effective_file_name());
-                let file_name = safe_file_name(img.effective_file_name());
-                let download_key = image_entry_download_key(img);
-                images_with_urls.push((item_label, file_name, download_key, img.url.clone()));
+                requests_with_urls.push(request);
             }
         }
 
-        let total = images_with_urls.len() as u32;
+        let total = requests_with_urls.len() as u32;
 
         if total == 0 {
             return DownloadResult {
                 files: HashMap::new(),
-                failure_summary,
+                failure_summary: FailureSummary::from_failures(failures, None),
             };
         }
 
         let now = Utc::now();
-        let mut ready_downloads = Vec::with_capacity(images_with_urls.len());
+        let mut ready_downloads = Vec::with_capacity(requests_with_urls.len());
         let mut expired_urls = 0usize;
         let mut latest_expired_at = None;
-        for (item_label, file_name, download_key, url) in images_with_urls {
-            match parse_url_expiry(&url, now) {
+        // Links are expired for every image when each lost a file to expiry.
+        let images_with_urls: HashSet<&str> = requests_with_urls
+            .iter()
+            .map(|request| request.image_key.as_str())
+            .collect();
+        let mut expired_images = HashSet::new();
+        for request in requests_with_urls {
+            match parse_url_expiry(&request.url, now) {
                 UrlExpiry::Expired(expires_at) => {
                     expired_urls += 1;
+                    expired_images.insert(request.image_key.as_str());
                     latest_expired_at = Some(
                         latest_expired_at
                             .map_or(expires_at, |current: DateTime<Utc>| current.max(expires_at)),
                     );
-                    failure_summary.record(FailureKind::ExpiredUrl, &file_name, None);
+                    failures.push(Failure::new(request, FailureKind::ExpiredUrl, None));
                 }
                 UrlExpiry::Active(_) => {
-                    ready_downloads.push((item_label, file_name, download_key, url));
+                    ready_downloads.push(request.clone());
                 }
                 UrlExpiry::Missing | UrlExpiry::Malformed => {
-                    ready_downloads.push((item_label, file_name, download_key, url));
+                    ready_downloads.push(request.clone());
                 }
             }
         }
-        if expired_urls > 0 {
-            failure_summary.expiry = Some(ExpirySummary {
-                all_expired: expired_urls == total as usize,
-                latest_expired_at: latest_expired_at.map(|value| value.timestamp()),
-            });
-        }
+        let expiry = (expired_urls > 0).then(|| ExpirySummary {
+            all_expired: expired_images.len() == images_with_urls.len(),
+            latest_expired_at: latest_expired_at.map(|value| value.timestamp()),
+        });
 
         let _ = channel.send(ProgressEvent {
             phase: "downloading".to_string(),
@@ -390,41 +472,45 @@ impl Downloader {
         if ready_downloads.is_empty() {
             return DownloadResult {
                 files: HashMap::new(),
-                failure_summary,
+                failure_summary: FailureSummary::from_failures(failures, expiry),
             };
         }
 
         let downloaded = Arc::new(Mutex::new(HashMap::new()));
         let counter = Arc::new(AtomicU32::new(expired_urls as u32));
-        let failure_summary = Arc::new(Mutex::new(failure_summary));
+        let failures = Arc::new(Mutex::new(failures));
         let client = self.client.clone();
 
         stream::iter(ready_downloads)
-            .map(|(item_label, file_name, download_key, url)| {
+            .map(|request| {
                 let client = client.clone();
                 let downloaded = Arc::clone(&downloaded);
                 let counter = Arc::clone(&counter);
-                let failure_summary = Arc::clone(&failure_summary);
+                let failures = Arc::clone(&failures);
                 let channel = channel.clone();
 
                 async move {
-                    if let Err(err) = validate_download_url(&url).await {
+                    let file_name = safe_file_name(&request.name);
+                    if let Err(err) = validate_download_url(&request.url).await {
                         let kind = err.failure_kind();
                         eprintln!("Skipping download for '{}': {:?}", file_name, kind);
-                        failure_summary.lock().await.record(kind, &file_name, None);
+                        failures
+                            .lock()
+                            .await
+                            .push(Failure::new(&request, kind, None));
                         let current = counter.fetch_add(1, Ordering::SeqCst) + 1;
                         let _ = channel.send(ProgressEvent {
                             phase: "downloading".to_string(),
                             current,
                             total,
-                            item: Some(item_label.clone()),
+                            item: Some(request.label.clone()),
                         });
                         return;
                     }
 
                     match download_prevalidated_url(
                         &client,
-                        &url,
+                        &request.url,
                         MAX_DOWNLOAD_BYTES,
                         RetryPolicy::production(),
                     )
@@ -432,16 +518,16 @@ impl Downloader {
                     {
                         Ok(bytes) => {
                             let mut map = downloaded.lock().await;
-                            map.insert(download_key, bytes);
+                            map.insert(request.key.clone(), bytes);
                         }
                         Err(err) => {
                             let kind = err.failure_kind();
                             eprintln!("Skipping download for '{}': {:?}", file_name, kind);
-                            failure_summary.lock().await.record(
+                            failures.lock().await.push(Failure::new(
+                                &request,
                                 kind,
-                                &file_name,
                                 err.http_status(),
-                            );
+                            ));
                         }
                     }
 
@@ -450,7 +536,7 @@ impl Downloader {
                         phase: "downloading".to_string(),
                         current,
                         total,
-                        item: Some(item_label),
+                        item: Some(request.label.clone()),
                     });
                 }
             })
@@ -463,13 +549,13 @@ impl Downloader {
             Err(arc) => arc.lock().await.clone(),
         };
 
-        let failure_summary = match Arc::try_unwrap(failure_summary) {
+        let failures = match Arc::try_unwrap(failures) {
             Ok(mutex) => mutex.into_inner(),
             Err(arc) => arc.lock().await.clone(),
         };
         DownloadResult {
             files,
-            failure_summary,
+            failure_summary: FailureSummary::from_failures(failures, expiry),
         }
     }
 }
@@ -958,7 +1044,14 @@ mod tests {
 
         let result = Downloader::new(1)
             .unwrap()
-            .download_all(&data.images, &channel)
+            .download_all(
+                &data
+                    .images
+                    .iter()
+                    .map(DownloadRequest::image)
+                    .collect::<Vec<_>>(),
+                &channel,
+            )
             .await;
 
         assert!(result.files.is_empty());
@@ -1315,7 +1408,14 @@ mod tests {
 
         let result = Downloader::new(1)
             .unwrap()
-            .download_all(&data.images, &channel)
+            .download_all(
+                &data
+                    .images
+                    .iter()
+                    .map(DownloadRequest::image)
+                    .collect::<Vec<_>>(),
+                &channel,
+            )
             .await;
 
         assert!(result.files.is_empty());
@@ -1343,7 +1443,14 @@ mod tests {
 
         let result = Downloader::new(1)
             .unwrap()
-            .download_all(&data.images, &channel)
+            .download_all(
+                &data
+                    .images
+                    .iter()
+                    .map(DownloadRequest::image)
+                    .collect::<Vec<_>>(),
+                &channel,
+            )
             .await;
 
         assert_eq!(result.failure_summary.groups.len(), 2);
@@ -1357,5 +1464,82 @@ mod tests {
         );
         let expiry = result.failure_summary.expiry.unwrap();
         assert!(!expiry.all_expired);
+    }
+
+    #[test]
+    fn depth_map_request_fetches_depth_url_under_its_zip_path_for_its_image() {
+        let image: ImageEntry = serde_json::from_str(
+            r#"{"file":"a.jpg","split":"val","url":"https://cdn.example/a.jpg","depth":{"url":"https://cdn.example/a_depth.png"}}"#,
+        )
+        .unwrap();
+
+        let image_request = DownloadRequest::image(&image);
+        let depth = DownloadRequest::depth_map(&image);
+
+        assert_eq!(depth.url, "https://cdn.example/a_depth.png");
+        assert_eq!(depth.label, "valid/depth/a.png");
+        assert_eq!(depth.name, "a.jpg (depth map)");
+        assert_eq!(depth.image_key, image_request.key);
+        assert_ne!(depth.key, image_request.key);
+        assert_ne!(
+            depth.key,
+            crate::parser::image_download_key("valid", "a.png")
+        );
+    }
+
+    #[test]
+    fn failures_count_once_per_image_under_a_stable_name() {
+        let failure = |image_key: &str, name: &str, kind| Failure {
+            image_key: image_key.to_string(),
+            name: name.to_string(),
+            kind,
+            http_status: None,
+        };
+        let failures = vec![
+            failure("a", "a.jpg (depth map)", FailureKind::NotFound),
+            failure("a", "a.jpg", FailureKind::AccessDenied),
+            failure("b", "b.jpg (depth map)", FailureKind::NotFound),
+        ];
+        let reversed: Vec<Failure> = failures.iter().rev().cloned().collect();
+
+        let summary = FailureSummary::from_failures(failures, None);
+
+        assert_eq!(summary, FailureSummary::from_failures(reversed, None));
+        let groups: Vec<_> = summary
+            .groups
+            .iter()
+            .map(|group| (group.kind, group.count, group.examples.clone()))
+            .collect();
+        assert_eq!(
+            groups,
+            [
+                (FailureKind::AccessDenied, 1, vec!["a.jpg".to_string()]),
+                (
+                    FailureKind::NotFound,
+                    1,
+                    vec!["b.jpg (depth map)".to_string()]
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn image_whose_own_link_expired_counts_as_expired_whatever_its_depth_link() {
+        let expired = Utc::now().timestamp() - CLOCK_SKEW_TOLERANCE_SECS - 1;
+        let image: ImageEntry = serde_json::from_str(&format!(
+            r#"{{"file":"a.jpg","split":"train","url":"https://cdn.example/a.jpg?Expires={expired}","depth":{{"url":"http://127.0.0.1/a.png"}}}}"#
+        ))
+        .unwrap();
+        let requests = [
+            DownloadRequest::image(&image),
+            DownloadRequest::depth_map(&image),
+        ];
+
+        let result = Downloader::new(1)
+            .unwrap()
+            .download_all(&requests, &Channel::new(|_| Ok(())))
+            .await;
+
+        assert!(result.failure_summary.expiry.unwrap().all_expired);
     }
 }

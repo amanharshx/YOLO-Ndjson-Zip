@@ -3,7 +3,7 @@ mod downloader;
 mod parser;
 
 use converter::{check_task_format, get_class_list, get_converter, Converter};
-use downloader::{DownloadResult, Downloader, FailureSummary, ProgressEvent};
+use downloader::{DownloadRequest, DownloadResult, Downloader, FailureSummary, ProgressEvent};
 use parser::{normalize_split, output_stem, parse_ndjson, ImageEntry, NDJSONData, ParseError};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -198,6 +198,7 @@ fn move_train_images_to_val(
         return Ok(None);
     }
 
+    let pairs_depth_maps = converter.pairs_depth_maps(&data.metadata.task);
     let mut train: Vec<&mut ImageEntry> = data
         .images
         .iter_mut()
@@ -209,10 +210,15 @@ fn move_train_images_to_val(
         (fnv1a_64(&name), name)
     });
     for image in train.into_iter().take(moved) {
-        let train_key = parser::image_entry_download_key(image);
+        let train_downloads = image_downloads(image, pairs_depth_maps);
         image.split = "val".to_string();
-        if let Some(bytes) = downloaded_images.remove(&train_key) {
-            downloaded_images.insert(parser::image_entry_download_key(image), bytes);
+        for (train, val) in train_downloads
+            .into_iter()
+            .zip(image_downloads(image, pairs_depth_maps))
+        {
+            if let Some(bytes) = downloaded_images.remove(&train.key) {
+                downloaded_images.insert(val.key, bytes);
+            }
         }
     }
     Ok(Some(AutoValSplit {
@@ -273,6 +279,37 @@ fn validate_semantic_polygons(data: &NDJSONData) -> Result<(), String> {
         "Semantic dataset has no polygons under annotations.segments in any image. \
          Annotation keys found: {}.",
         keys
+    ))
+}
+
+/// Rejects a depth export Ultralytics would refuse for missing depth URLs, before download.
+fn validate_depth_dataset(
+    data: &NDJSONData,
+    converter: &dyn Converter,
+    include_images: bool,
+) -> Result<(), String> {
+    if !converter.pairs_depth_maps(&data.metadata.task) {
+        return Ok(());
+    }
+    if !include_images {
+        return Err("Depth exports need images: their depth maps are the labels.".to_string());
+    }
+    let mut missing = data
+        .images
+        .iter()
+        .filter(|image| image.depth_url().is_none());
+    let Some(first) = missing.next() else {
+        return Ok(());
+    };
+    let affected = 1 + missing.count();
+    let count = if affected > 1 {
+        format!(" ({} image lines affected)", affected)
+    } else {
+        String::new()
+    };
+    Err(format!(
+        "Depth image '{}' has no depth.url{}. Every depth image line needs one.",
+        first.file, count
     ))
 }
 
@@ -384,8 +421,30 @@ fn prepare_export_images(data: &mut NDJSONData, converter: &dyn Converter) -> us
     unlabeled_images
 }
 
+/// Files downloaded for one image: the image, then its depth map when `pairs_depth_maps`.
+fn image_downloads(image: &ImageEntry, pairs_depth_maps: bool) -> Vec<DownloadRequest> {
+    let mut downloads = vec![DownloadRequest::image(image)];
+    if pairs_depth_maps {
+        downloads.push(DownloadRequest::depth_map(image));
+    }
+    downloads
+}
+
+/// Every file `converter` needs downloaded for `data`, in one batch, so progress and the
+/// failure summary cover depth maps too.
+fn download_requests(data: &NDJSONData, converter: &dyn Converter) -> Vec<DownloadRequest> {
+    let pairs_depth_maps = converter.pairs_depth_maps(&data.metadata.task);
+    data.images
+        .iter()
+        .flat_map(|image| image_downloads(image, pairs_depth_maps))
+        .collect()
+}
+
+/// Drops images any of whose files failed to download, so an image and its depth map are
+/// kept or omitted together. Returns how many were dropped.
 fn filter_images_without_downloads(
     data: &mut NDJSONData,
+    converter: &dyn Converter,
     downloaded_images: &HashMap<String, Vec<u8>>,
     include_images: bool,
 ) -> usize {
@@ -402,9 +461,13 @@ fn filter_images_without_downloads(
             .insert(max_id.to_string(), name.clone());
     }
 
+    let pairs_depth_maps = converter.pairs_depth_maps(&data.metadata.task);
     let original_image_count = data.images.len();
-    data.images
-        .retain(|image| downloaded_images.contains_key(&parser::image_entry_download_key(image)));
+    data.images.retain(|image| {
+        image_downloads(image, pairs_depth_maps)
+            .iter()
+            .all(|download| downloaded_images.contains_key(&download.key))
+    });
     original_image_count - data.images.len()
 }
 
@@ -471,13 +534,16 @@ async fn convert_ndjson(
         .ok();
 
     validate_semantic_polygons(&data)?;
+    validate_depth_dataset(&data, converter.as_ref(), include_images)?;
     val_images_to_move(&data, converter.as_ref())?;
 
     // Download images if requested
     let download_result = if include_images {
         let downloader = Downloader::new(MAX_DOWNLOAD_CONCURRENCY)
             .map_err(|e| format!("Failed to init downloader: {}", e))?;
-        downloader.download_all(&data.images, &channel).await
+        downloader
+            .download_all(&download_requests(&data, converter.as_ref()), &channel)
+            .await
     } else {
         DownloadResult {
             files: std::collections::HashMap::new(),
@@ -485,8 +551,12 @@ async fn convert_ndjson(
         }
     };
 
-    let omitted_images =
-        filter_images_without_downloads(&mut data, &download_result.files, include_images);
+    let omitted_images = filter_images_without_downloads(
+        &mut data,
+        converter.as_ref(),
+        &download_result.files,
+        include_images,
+    );
     let kept_image_count = data.images.len();
     let renamed_images = data
         .images
@@ -626,14 +696,15 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        file_name_with_suffix, filter_images_without_downloads, is_ndjson_size_allowed,
-        move_train_images_to_val, normalize_zip_path, prepare_export_images,
-        prepare_images_with_unique_output_names, resolve_image_sizes, short_stable_hash,
-        val_images_to_move, validate_downloaded_image_count, validate_pose_dataset,
-        validate_semantic_polygons, ConvertErrorKind, MAX_NDJSON_BYTES,
+        download_requests, file_name_with_suffix, filter_images_without_downloads,
+        is_ndjson_size_allowed, move_train_images_to_val, normalize_zip_path,
+        prepare_export_images, prepare_images_with_unique_output_names, resolve_image_sizes,
+        short_stable_hash, val_images_to_move, validate_depth_dataset,
+        validate_downloaded_image_count, validate_pose_dataset, validate_semantic_polygons,
+        ConvertErrorKind, MAX_NDJSON_BYTES,
     };
     use crate::converter::{get_class_list, get_converter};
-    use crate::downloader::{FailureGroup, FailureKind, FailureSummary};
+    use crate::downloader::{DownloadRequest, FailureGroup, FailureKind, FailureSummary};
     use crate::parser::{image_entry_download_key, parse_ndjson};
     use std::collections::{HashMap, HashSet};
 
@@ -655,7 +726,12 @@ mod tests {
             b"present-image".to_vec(),
         );
 
-        let omitted = filter_images_without_downloads(&mut data, &downloaded, true);
+        let omitted = filter_images_without_downloads(
+            &mut data,
+            get_converter("yolo").unwrap().as_ref(),
+            &downloaded,
+            true,
+        );
 
         assert_eq!(omitted, 1);
         assert_eq!(data.images.len(), 1);
@@ -675,7 +751,12 @@ mod tests {
             b"present-image".to_vec(),
         )]);
 
-        filter_images_without_downloads(&mut data, &downloaded, true);
+        filter_images_without_downloads(
+            &mut data,
+            get_converter("yolo").unwrap().as_ref(),
+            &downloaded,
+            true,
+        );
 
         assert_eq!(data.images.len(), 1);
         assert_eq!(get_class_list(&data), vec!["class0", "class1", "class2"]);
@@ -685,7 +766,12 @@ mod tests {
     fn filtering_is_disabled_for_labels_only_conversion() {
         let mut data = partial_download_data();
 
-        let omitted = filter_images_without_downloads(&mut data, &HashMap::new(), false);
+        let omitted = filter_images_without_downloads(
+            &mut data,
+            get_converter("yolo").unwrap().as_ref(),
+            &HashMap::new(),
+            false,
+        );
 
         assert_eq!(omitted, 0);
         assert_eq!(data.images.len(), 2);
@@ -699,7 +785,12 @@ mod tests {
             image_entry_download_key(&data.images[0]),
             b"present-image".to_vec(),
         );
-        filter_images_without_downloads(&mut data, &downloaded, true);
+        filter_images_without_downloads(
+            &mut data,
+            get_converter("yolo").unwrap().as_ref(),
+            &downloaded,
+            true,
+        );
 
         for format in ["yolo", "yolo_darknet", "coco", "pascal_voc", "createml"] {
             let files = get_converter(format).unwrap().convert(&data, &downloaded);
@@ -1456,7 +1547,12 @@ mod tests {
             assert!(val_images_to_move(&data, converter.as_ref()).is_ok());
             let mut downloaded = all_downloaded(&data);
             downloaded.retain(|key, _| key.ends_with(":t0.jpg"));
-            let omitted = filter_images_without_downloads(&mut data, &downloaded, true);
+            let omitted = filter_images_without_downloads(
+                &mut data,
+                get_converter("yolo").unwrap().as_ref(),
+                &downloaded,
+                true,
+            );
 
             let error =
                 move_train_images_to_val(&mut data, converter.as_ref(), &mut downloaded, omitted)
@@ -1491,7 +1587,12 @@ mod tests {
         let mut data = split_data("detect", 10, 2);
         let mut downloaded = all_downloaded(&data);
         downloaded.retain(|key, _| !key.contains(":valid:"));
-        filter_images_without_downloads(&mut data, &downloaded, true);
+        filter_images_without_downloads(
+            &mut data,
+            get_converter("yolo").unwrap().as_ref(),
+            &downloaded,
+            true,
+        );
         let converter = get_converter("yolo").unwrap();
 
         let moved = move_train_images_to_val(&mut data, converter.as_ref(), &mut downloaded, 0)
@@ -1620,5 +1721,243 @@ mod tests {
 
             converter.convert(&data, &HashMap::new());
         }
+    }
+
+    /// Depth dataset with `dataset_fields` appended to its record, and `train` and `val`
+    /// images `a.jpg` and `b.jpg` with depth maps, as in the Ultralytics NDJSON spec.
+    fn depth_data(dataset_fields: &str) -> crate::parser::NDJSONData {
+        parse_ndjson(&format!(
+            r#"{{"type":"dataset","task":"depth","name":"rooms","class_names":{{}}{dataset_fields}}}
+{{"type":"image","file":"a.jpg","split":"train","url":"https://cdn.example/a.jpg","depth":{{"url":"https://cdn.example/a_depth.png"}}}}
+{{"type":"image","file":"b.jpg","split":"val","url":"https://cdn.example/b.jpg","depth":{{"url":"https://cdn.example/b_depth.png"}}}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn image_without_depth_url_fails_before_download_naming_the_file() {
+        let yolo = get_converter("yolo").unwrap();
+        for depth in [
+            "",
+            r#","depth":null"#,
+            r#","depth":"https://cdn.example/b_depth.png""#,
+            r#","depth":{}"#,
+            r#","depth":{"url":""}"#,
+            r#","depth":{"url":5}"#,
+        ] {
+            let mut data = depth_data("");
+            let line = format!(
+                r#"{{"file":"c.jpg","split":"train","url":"https://cdn.example/c.jpg"{depth}}}"#
+            );
+            data.images.push(serde_json::from_str(&line).unwrap());
+
+            assert_eq!(
+                validate_depth_dataset(&data, yolo.as_ref(), true).unwrap_err(),
+                "Depth image 'c.jpg' has no depth.url. Every depth image line needs one.",
+                "{depth}"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_depth_urls_are_counted_when_several_lines_lack_one() {
+        let mut data = depth_data("");
+        for image in &mut data.images {
+            image.depth = None;
+        }
+
+        let yolo = get_converter("yolo").unwrap();
+        assert_eq!(
+            validate_depth_dataset(&data, yolo.as_ref(), true).unwrap_err(),
+            "Depth image 'a.jpg' has no depth.url (2 image lines affected). \
+             Every depth image line needs one."
+        );
+    }
+
+    #[test]
+    fn labels_only_depth_export_is_rejected() {
+        let yolo = get_converter("yolo").unwrap();
+
+        assert_eq!(
+            validate_depth_dataset(&depth_data(""), yolo.as_ref(), false).unwrap_err(),
+            "Depth exports need images: their depth maps are the labels."
+        );
+    }
+
+    /// Bytes for every file YOLO downloads for `data`, each spelling its progress label.
+    fn depth_downloads(data: &crate::parser::NDJSONData) -> HashMap<String, Vec<u8>> {
+        download_requests(data, get_converter("yolo").unwrap().as_ref())
+            .into_iter()
+            .map(|request| (request.key, request.label.into_bytes()))
+            .collect()
+    }
+
+    fn sorted_paths(files: &HashMap<String, Vec<u8>>) -> Vec<&str> {
+        let mut paths: Vec<&str> = files.keys().map(String::as_str).collect();
+        paths.sort();
+        paths
+    }
+
+    #[test]
+    fn depth_export_pairs_each_image_with_its_depth_map_and_declares_the_task() {
+        let data = depth_data("");
+
+        let files = get_converter("yolo")
+            .unwrap()
+            .convert(&data, &depth_downloads(&data));
+
+        assert_eq!(
+            sorted_paths(&files),
+            [
+                "classes.txt",
+                "data.yaml",
+                "train/depth/a.png",
+                "train/images/a.jpg",
+                "valid/depth/b.png",
+                "valid/images/b.jpg",
+            ]
+        );
+        assert_eq!(files["train/images/a.jpg"], b"train/a.jpg");
+        assert_eq!(files["train/depth/a.png"], b"train/depth/a.png");
+        assert_eq!(files["valid/depth/b.png"], b"valid/depth/b.png");
+        assert_eq!(files["classes.txt"], b"depth");
+        let yaml = std::str::from_utf8(&files["data.yaml"]).unwrap();
+        assert!(
+            yaml.ends_with(
+                "train: train/images\nval: valid/images\nnc: 1\nnames:\n  0: \"depth\"\n\
+                 task: depth\ndepth_scale: 1000\n"
+            ),
+            "{yaml}"
+        );
+    }
+
+    #[test]
+    fn declared_depth_scale_is_written_unchanged() {
+        for (value, written) in [("256", "256"), ("0.5", "0.5"), ("1e-7", "0.0000001")] {
+            let data = depth_data(&format!(r#","depth_scale":{value}"#));
+
+            let files = get_converter("yolo")
+                .unwrap()
+                .convert(&data, &depth_downloads(&data));
+
+            let yaml = std::str::from_utf8(&files["data.yaml"]).unwrap();
+            assert!(
+                yaml.ends_with(&format!("depth_scale: {written}\n")),
+                "{value}: {yaml}"
+            );
+        }
+    }
+
+    #[test]
+    fn image_or_depth_map_that_failed_to_download_omits_the_pair() {
+        let yolo = get_converter("yolo").unwrap();
+        let first = &depth_data("").images[0];
+        for failed in [
+            DownloadRequest::image(first).key,
+            DownloadRequest::depth_map(first).key,
+        ] {
+            let mut data = depth_data("");
+            let mut downloaded = depth_downloads(&data);
+            downloaded.remove(&failed);
+
+            let omitted =
+                filter_images_without_downloads(&mut data, yolo.as_ref(), &downloaded, true);
+            let files = yolo.convert(&data, &downloaded);
+
+            assert_eq!(omitted, 1, "{failed}");
+            assert_eq!(
+                sorted_paths(&files),
+                [
+                    "classes.txt",
+                    "data.yaml",
+                    "valid/depth/b.png",
+                    "valid/images/b.jpg"
+                ],
+                "{failed}"
+            );
+        }
+    }
+
+    #[test]
+    fn auto_val_split_moves_each_depth_map_with_its_image() {
+        let lines: Vec<String> = (0..10)
+            .map(|i| {
+                format!(
+                    r#"{{"file":"t{i}.jpg","split":"train","url":"https://cdn.example/t{i}.jpg","depth":{{"url":"https://cdn.example/t{i}.png"}}}}"#
+                )
+            })
+            .collect();
+        let header = r#"{"type":"dataset","task":"depth","name":"rooms"}"#.to_string();
+        let mut data = parse_ndjson(&[vec![header], lines].concat().join("\n")).unwrap();
+        let mut downloaded = depth_downloads(&data);
+        let yolo = get_converter("yolo").unwrap();
+
+        move_train_images_to_val(&mut data, yolo.as_ref(), &mut downloaded, 0).unwrap();
+        let files = yolo.convert(&data, &downloaded);
+
+        let val = paths_under(&files, "valid/");
+        assert_eq!(val.len(), 2, "{val:?}");
+        let stem = val[1]
+            .strip_prefix("valid/images/")
+            .and_then(|name| name.strip_suffix(".jpg"))
+            .unwrap();
+        assert_eq!(val[0], format!("valid/depth/{stem}.png"));
+        assert_eq!(files[&val[0]], format!("train/depth/{stem}.png").as_bytes());
+        assert_eq!(paths_under(&files, "train/depth/").len(), 9);
+    }
+
+    #[test]
+    fn same_stem_depth_images_get_their_own_depth_maps() {
+        let mut data = depth_data("");
+        data.images[1] = serde_json::from_str(
+            r#"{"file":"a.png","split":"train","url":"https://cdn.example/a.png","depth":{"url":"https://cdn.example/a2_depth.png"}}"#,
+        )
+        .unwrap();
+        let yolo = get_converter("yolo").unwrap();
+        prepare_export_images(&mut data, yolo.as_ref());
+
+        let files = yolo.convert(&data, &depth_downloads(&data));
+
+        let renamed = data.images[1].effective_file_name();
+        let renamed_depth = format!("train/depth/{}.png", renamed.trim_end_matches(".png"));
+        assert_eq!(
+            sorted_paths(&files)[2..],
+            [
+                "train/depth/a.png".to_string(),
+                renamed_depth.clone(),
+                "train/images/a.jpg".to_string(),
+                format!("train/images/{renamed}"),
+            ]
+        );
+        assert_eq!(files["train/depth/a.png"], b"train/depth/a.png");
+        assert_eq!(files[&renamed_depth], renamed_depth.as_bytes());
+    }
+
+    #[test]
+    fn nested_images_folder_gets_its_depth_map_where_ultralytics_looks() {
+        let mut data = depth_data("");
+        data.images[0].file = r"scans\images/a.jpg".to_string();
+
+        let files = get_converter("yolo")
+            .unwrap()
+            .convert(&data, &depth_downloads(&data));
+
+        // Ultralytics swaps the last `images` folder of the image path for `depth`.
+        let depth = "train/images/scans/depth/a.png";
+        let zip_paths: Vec<String> = sorted_paths(&files)
+            .into_iter()
+            .map(|path| crate::normalize_zip_path(path).unwrap())
+            .collect();
+        assert!(zip_paths.contains(&depth.to_string()), "{zip_paths:?}");
+        assert!(zip_paths.contains(&"train/images/scans/images/a.jpg".to_string()));
+        // The progress label names the same path.
+        let depth_entry = files
+            .iter()
+            .find(|(path, _)| crate::normalize_zip_path(path).unwrap() == depth)
+            .unwrap();
+        assert_eq!(
+            crate::normalize_zip_path(std::str::from_utf8(depth_entry.1).unwrap()).unwrap(),
+            depth
+        );
     }
 }

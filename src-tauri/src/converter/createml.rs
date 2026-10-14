@@ -256,6 +256,7 @@ mod tests {
                 class_names: HashMap::from([("0".to_string(), "animal".to_string())]),
                 kpt_shape: None,
                 version: "1".to_string(),
+                depth_scale: 1000.0,
             },
             images: vec![
                 ImageEntry {
@@ -265,6 +266,7 @@ mod tests {
                     width: Some(640),
                     height: Some(480),
                     split: "train".to_string(),
+                    depth: None,
                     annotations: Some(json!({
                         "bboxes": [[0, 0.5, 0.5, 0.2, 0.2]]
                     })),
@@ -276,6 +278,7 @@ mod tests {
                     width: Some(640),
                     height: Some(480),
                     split: "val".to_string(),
+                    depth: None,
                     annotations: Some(json!({
                         "bboxes": [[0, 0.4, 0.4, 0.3, 0.3]]
                     })),
@@ -306,6 +309,7 @@ mod tests {
                 class_names: HashMap::from([("0".to_string(), "animal".to_string())]),
                 kpt_shape: None,
                 version: "1".to_string(),
+                depth_scale: 1000.0,
             },
             images: vec![ImageEntry {
                 file: "img1.jpg".to_string(),
@@ -314,6 +318,7 @@ mod tests {
                 width: Some(640),
                 height: Some(480),
                 split: "train".to_string(),
+                depth: None,
                 annotations: Some(json!({
                     "boxes": [[0, 0.5, 0.5, 0.2, 0.2]]
                 })),
