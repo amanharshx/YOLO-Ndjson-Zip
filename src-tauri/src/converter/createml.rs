@@ -1,4 +1,4 @@
-use super::{class_name, get_class_names, Converter};
+use super::{class_name, get_class_names, image_size, Converter};
 use crate::parser::{image_download_key, ImageEntry, NDJSONData};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -46,16 +46,17 @@ impl CreateMlConverter {
         let result: Vec<CreateMlImage> = images
             .iter()
             .map(|img| {
+                let (width, height) = image_size(img);
                 let annotations = img
                     .get_bboxes()
                     .iter()
                     .map(|bbox| CreateMlAnnotation {
                         label: class_name(class_names, bbox.class_id),
                         coordinates: CreateMlCoordinates {
-                            x: bbox.x * img.width as f64,
-                            y: bbox.y * img.height as f64,
-                            width: bbox.width * img.width as f64,
-                            height: bbox.height * img.height as f64,
+                            x: bbox.x * width as f64,
+                            y: bbox.y * height as f64,
+                            width: bbox.width * width as f64,
+                            height: bbox.height * height as f64,
                         },
                     })
                     .collect();
@@ -79,6 +80,7 @@ impl CreateMlConverter {
         let result: Vec<CreateMlImage> = images
             .iter()
             .map(|img| {
+                let (width, height) = image_size(img);
                 let annotations = img
                     .get_obb_annotations()
                     .iter()
@@ -90,10 +92,10 @@ impl CreateMlConverter {
                         let max_x = xs.iter().cloned().fold(f64::MIN, f64::max);
                         let min_y = ys.iter().cloned().fold(f64::MAX, f64::min);
                         let max_y = ys.iter().cloned().fold(f64::MIN, f64::max);
-                        let cx = (min_x + max_x) / 2.0 * img.width as f64;
-                        let cy = (min_y + max_y) / 2.0 * img.height as f64;
-                        let w = (max_x - min_x) * img.width as f64;
-                        let h = (max_y - min_y) * img.height as f64;
+                        let cx = (min_x + max_x) / 2.0 * width as f64;
+                        let cy = (min_y + max_y) / 2.0 * height as f64;
+                        let w = (max_x - min_x) * width as f64;
+                        let h = (max_y - min_y) * height as f64;
 
                         CreateMlAnnotation {
                             label: class_name(class_names, obb.class_id),
@@ -126,6 +128,7 @@ impl CreateMlConverter {
         let result: Vec<CreateMlImage> = images
             .iter()
             .map(|img| {
+                let (width, height) = image_size(img);
                 let annotations = img
                     .get_segment_annotations()
                     .iter()
@@ -138,10 +141,10 @@ impl CreateMlConverter {
                         let max_x = xs.iter().cloned().fold(f64::MIN, f64::max);
                         let min_y = ys.iter().cloned().fold(f64::MAX, f64::min);
                         let max_y = ys.iter().cloned().fold(f64::MIN, f64::max);
-                        let cx = (min_x + max_x) / 2.0 * img.width as f64;
-                        let cy = (min_y + max_y) / 2.0 * img.height as f64;
-                        let w = (max_x - min_x) * img.width as f64;
-                        let h = (max_y - min_y) * img.height as f64;
+                        let cx = (min_x + max_x) / 2.0 * width as f64;
+                        let cy = (min_y + max_y) / 2.0 * height as f64;
+                        let w = (max_x - min_x) * width as f64;
+                        let h = (max_y - min_y) * height as f64;
 
                         CreateMlAnnotation {
                             label: class_name(class_names, seg.class_id),
@@ -188,6 +191,10 @@ impl CreateMlConverter {
 }
 
 impl Converter for CreateMlConverter {
+    fn needs_image_sizes(&self, task: &str) -> bool {
+        task != "classify"
+    }
+
     fn convert(
         &self,
         data: &NDJSONData,
@@ -255,8 +262,8 @@ mod tests {
                     file: "img1.jpg".to_string(),
                     output_file: None,
                     url: String::new(),
-                    width: 640,
-                    height: 480,
+                    width: Some(640),
+                    height: Some(480),
                     split: "train".to_string(),
                     annotations: Some(json!({
                         "bboxes": [[0, 0.5, 0.5, 0.2, 0.2]]
@@ -266,8 +273,8 @@ mod tests {
                     file: "img1.jpg".to_string(),
                     output_file: None,
                     url: String::new(),
-                    width: 640,
-                    height: 480,
+                    width: Some(640),
+                    height: Some(480),
                     split: "val".to_string(),
                     annotations: Some(json!({
                         "bboxes": [[0, 0.4, 0.4, 0.3, 0.3]]
@@ -304,8 +311,8 @@ mod tests {
                 file: "img1.jpg".to_string(),
                 output_file: Some("img1__abcd1234.jpg".to_string()),
                 url: String::new(),
-                width: 640,
-                height: 480,
+                width: Some(640),
+                height: Some(480),
                 split: "train".to_string(),
                 annotations: Some(json!({
                     "boxes": [[0, 0.5, 0.5, 0.2, 0.2]]

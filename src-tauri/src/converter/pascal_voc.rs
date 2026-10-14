@@ -1,4 +1,4 @@
-use super::{class_name, get_class_names, Converter};
+use super::{class_name, get_class_names, image_size, Converter};
 use crate::parser::{image_download_key, output_stem, ImageEntry, NDJSONData};
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
@@ -31,6 +31,7 @@ impl PascalVocConverter {
             .ok();
 
         let image_file = img.effective_file_name();
+        let (width, height) = image_size(img);
 
         // folder (empty)
         Self::write_element(&mut writer, "folder", "");
@@ -52,8 +53,8 @@ impl PascalVocConverter {
         writer
             .write_event(Event::Start(BytesStart::new("size")))
             .ok();
-        Self::write_element(&mut writer, "width", &img.width.to_string());
-        Self::write_element(&mut writer, "height", &img.height.to_string());
+        Self::write_element(&mut writer, "width", &width.to_string());
+        Self::write_element(&mut writer, "height", &height.to_string());
         Self::write_element(&mut writer, "depth", "3");
         writer.write_event(Event::End(BytesEnd::new("size"))).ok();
 
@@ -78,8 +79,8 @@ impl PascalVocConverter {
                 let mut max_y = f64::MIN;
 
                 for (x, y) in &obb.points {
-                    let abs_x = x * img.width as f64;
-                    let abs_y = y * img.height as f64;
+                    let abs_x = x * width as f64;
+                    let abs_y = y * height as f64;
                     min_x = min_x.min(abs_x);
                     min_y = min_y.min(abs_y);
                     max_x = max_x.max(abs_x);
@@ -96,8 +97,8 @@ impl PascalVocConverter {
                     .ok();
                 Self::write_element(&mut writer, "xmin", &xmin.max(0).to_string());
                 Self::write_element(&mut writer, "ymin", &ymin.max(0).to_string());
-                Self::write_element(&mut writer, "xmax", &xmax.min(img.width).to_string());
-                Self::write_element(&mut writer, "ymax", &ymax.min(img.height).to_string());
+                Self::write_element(&mut writer, "xmax", &xmax.min(width).to_string());
+                Self::write_element(&mut writer, "ymax", &ymax.min(height).to_string());
                 writer.write_event(Event::End(BytesEnd::new("bndbox"))).ok();
 
                 writer.write_event(Event::End(BytesEnd::new("object"))).ok();
@@ -125,8 +126,8 @@ impl PascalVocConverter {
                 let mut max_y = f64::MIN;
 
                 for (x, y) in &seg.points {
-                    let abs_x = x * img.width as f64;
-                    let abs_y = y * img.height as f64;
+                    let abs_x = x * width as f64;
+                    let abs_y = y * height as f64;
                     min_x = min_x.min(abs_x);
                     min_y = min_y.min(abs_y);
                     max_x = max_x.max(abs_x);
@@ -143,8 +144,8 @@ impl PascalVocConverter {
                     .ok();
                 Self::write_element(&mut writer, "xmin", &xmin.max(0).to_string());
                 Self::write_element(&mut writer, "ymin", &ymin.max(0).to_string());
-                Self::write_element(&mut writer, "xmax", &xmax.min(img.width).to_string());
-                Self::write_element(&mut writer, "ymax", &ymax.min(img.height).to_string());
+                Self::write_element(&mut writer, "xmax", &xmax.min(width).to_string());
+                Self::write_element(&mut writer, "ymax", &ymax.min(height).to_string());
                 writer.write_event(Event::End(BytesEnd::new("bndbox"))).ok();
 
                 writer.write_event(Event::End(BytesEnd::new("object"))).ok();
@@ -163,18 +164,18 @@ impl PascalVocConverter {
 
                 // Convert normalized coords to absolute Pascal VOC format
                 // VOC uses [xmin, ymin, xmax, ymax] in pixels
-                let xmin = ((bbox.x - bbox.width / 2.0) * img.width as f64).round() as i32;
-                let ymin = ((bbox.y - bbox.height / 2.0) * img.height as f64).round() as i32;
-                let xmax = ((bbox.x + bbox.width / 2.0) * img.width as f64).round() as i32;
-                let ymax = ((bbox.y + bbox.height / 2.0) * img.height as f64).round() as i32;
+                let xmin = ((bbox.x - bbox.width / 2.0) * width as f64).round() as i32;
+                let ymin = ((bbox.y - bbox.height / 2.0) * height as f64).round() as i32;
+                let xmax = ((bbox.x + bbox.width / 2.0) * width as f64).round() as i32;
+                let ymax = ((bbox.y + bbox.height / 2.0) * height as f64).round() as i32;
 
                 writer
                     .write_event(Event::Start(BytesStart::new("bndbox")))
                     .ok();
                 Self::write_element(&mut writer, "xmin", &xmin.max(0).to_string());
                 Self::write_element(&mut writer, "ymin", &ymin.max(0).to_string());
-                Self::write_element(&mut writer, "xmax", &xmax.min(img.width).to_string());
-                Self::write_element(&mut writer, "ymax", &ymax.min(img.height).to_string());
+                Self::write_element(&mut writer, "xmax", &xmax.min(width).to_string());
+                Self::write_element(&mut writer, "ymax", &ymax.min(height).to_string());
                 writer.write_event(Event::End(BytesEnd::new("bndbox"))).ok();
 
                 writer.write_event(Event::End(BytesEnd::new("object"))).ok();
@@ -197,6 +198,10 @@ impl PascalVocConverter {
 }
 
 impl Converter for PascalVocConverter {
+    fn needs_image_sizes(&self, task: &str) -> bool {
+        task != "classify"
+    }
+
     fn convert(
         &self,
         data: &NDJSONData,
@@ -286,8 +291,8 @@ mod tests {
                     file: "img1.jpg".to_string(),
                     output_file: None,
                     url: String::new(),
-                    width: 640,
-                    height: 480,
+                    width: Some(640),
+                    height: Some(480),
                     split: "train".to_string(),
                     annotations: Some(json!({
                         "bboxes": [[0, 0.5, 0.5, 0.2, 0.2]]
@@ -297,8 +302,8 @@ mod tests {
                     file: "img1.jpg".to_string(),
                     output_file: None,
                     url: String::new(),
-                    width: 640,
-                    height: 480,
+                    width: Some(640),
+                    height: Some(480),
                     split: "val".to_string(),
                     annotations: Some(json!({
                         "bboxes": [[0, 0.4, 0.4, 0.3, 0.3]]
@@ -335,8 +340,8 @@ mod tests {
                 file: "a.jpg".to_string(),
                 output_file: None,
                 url: String::new(),
-                width: 640,
-                height: 480,
+                width: Some(640),
+                height: Some(480),
                 split: "train".to_string(),
                 annotations: Some(json!({
                     "boxes": [[0, 0.5, 0.5, 0.2, 0.2], [2, 0.4, 0.4, 0.1, 0.1]]
@@ -390,8 +395,8 @@ mod tests {
                     file: "Frame_98.jpg".to_string(),
                     output_file: None,
                     url: "https://cdn.example/a.jpg".to_string(),
-                    width: 640,
-                    height: 480,
+                    width: Some(640),
+                    height: Some(480),
                     split: "train".to_string(),
                     annotations: Some(json!({
                         "boxes": [[0, 0.5, 0.5, 0.2, 0.2]]
@@ -401,8 +406,8 @@ mod tests {
                     file: "Frame_98.jpg".to_string(),
                     output_file: Some("Frame_98__abcd1234.jpg".to_string()),
                     url: "https://cdn.example/b.jpg".to_string(),
-                    width: 640,
-                    height: 480,
+                    width: Some(640),
+                    height: Some(480),
                     split: "train".to_string(),
                     annotations: Some(json!({
                         "boxes": [[0, 0.4, 0.4, 0.3, 0.3]]

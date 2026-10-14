@@ -309,8 +309,8 @@ mod tests {
             file: format!("{}.jpg", split),
             output_file: None,
             url: String::new(),
-            width: 640,
-            height: 480,
+            width: Some(640),
+            height: Some(480),
             split: split.to_string(),
             annotations: Some(json!({
                 "bboxes": [[0, 0.5, 0.5, 0.2, 0.2]]
@@ -475,8 +475,8 @@ mod tests {
             file: "img1.jpg".to_string(),
             output_file: None,
             url: String::new(),
-            width: 640,
-            height: 480,
+            width: Some(640),
+            height: Some(480),
             split: "train".to_string(),
             annotations: Some(json!({
                 "classification": [0]
@@ -530,8 +530,8 @@ mod tests {
             file: "img1.jpg".to_string(),
             output_file: None,
             url: String::new(),
-            width: 640,
-            height: 480,
+            width: Some(640),
+            height: Some(480),
             split: "train".to_string(),
             annotations: Some(json!({
                 "bboxes": [[0, 0.5, 0.5, 0.2, 0.2]]
@@ -541,8 +541,8 @@ mod tests {
             file: "img1.jpg".to_string(),
             output_file: None,
             url: String::new(),
-            width: 640,
-            height: 480,
+            width: Some(640),
+            height: Some(480),
             split: "val".to_string(),
             annotations: Some(json!({
                 "bboxes": [[0, 0.4, 0.4, 0.3, 0.3]]
@@ -576,8 +576,8 @@ mod tests {
                     file: "Frame_98.jpg".to_string(),
                     output_file: None,
                     url: "https://cdn.example/a.jpg".to_string(),
-                    width: 640,
-                    height: 480,
+                    width: Some(640),
+                    height: Some(480),
                     split: "train".to_string(),
                     annotations: Some(json!({
                         "boxes": [[0, 0.5, 0.5, 0.2, 0.2]]
@@ -587,8 +587,8 @@ mod tests {
                     file: "Frame_98.jpg".to_string(),
                     output_file: Some("Frame_98__abcd1234.jpg".to_string()),
                     url: "https://cdn.example/b.jpg".to_string(),
-                    width: 640,
-                    height: 480,
+                    width: Some(640),
+                    height: Some(480),
                     split: "train".to_string(),
                     annotations: Some(json!({
                         "boxes": [[1, 0.4, 0.4, 0.3, 0.3]]
@@ -629,8 +629,8 @@ mod tests {
                 file: "object.jpg".to_string(),
                 output_file: None,
                 url: String::new(),
-                width: 100,
-                height: 100,
+                width: Some(100),
+                height: Some(100),
                 split: "train".to_string(),
                 annotations: Some(json!({
                     "pose": [[0, 0.5, 0.5, 0.8, 0.8, 0.1, 0.2, 0.3, 0.4]]
@@ -665,8 +665,8 @@ mod tests {
                 file: "person.jpg".to_string(),
                 output_file: None,
                 url: String::new(),
-                width: 100,
-                height: 100,
+                width: Some(100),
+                height: Some(100),
                 split: "train".to_string(),
                 annotations: Some(json!({ "pose": [pose_row] })),
             }],
@@ -716,8 +716,8 @@ mod tests {
                 file: "object.jpg".to_string(),
                 output_file: None,
                 url: String::new(),
-                width: 100,
-                height: 100,
+                width: Some(100),
+                height: Some(100),
                 split: "train".to_string(),
                 annotations: Some(json!({
                     "pose": [[0, 0.5, 0.5, 0.8, 0.8, 0.1, 0.2]]
@@ -743,8 +743,8 @@ mod tests {
                 file: "street.jpg".to_string(),
                 output_file: None,
                 url: String::new(),
-                width: 640,
-                height: 640,
+                width: Some(640),
+                height: Some(640),
                 split: "train".to_string(),
                 annotations: Some(json!({
                     "segments": [[0, 0.1, 0.1, 0.2, 0.1, 0.2, 0.2, 0.1, 0.2]]
@@ -777,8 +777,8 @@ mod tests {
                 file: "dental.jpg".to_string(),
                 output_file: None,
                 url: String::new(),
-                width: 640,
-                height: 640,
+                width: Some(640),
+                height: Some(640),
                 split: "train".to_string(),
                 annotations: Some(json!({
                     "obb": [[0, 0.3, 0.6, 0.2, 0.7, 0.25, 0.7, 0.29, 0.63]]

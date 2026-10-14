@@ -111,8 +111,11 @@ pub struct ImageEntry {
     pub output_file: Option<String>,
     #[serde(default)]
     pub url: String,
-    pub width: i32,
-    pub height: i32,
+    /// Optional, as in Ultralytics; formats that need pixel sizes fill gaps from the image.
+    #[serde(default)]
+    pub width: Option<i32>,
+    #[serde(default)]
+    pub height: Option<i32>,
     #[serde(default, deserialize_with = "deserialize_split")]
     pub split: String,
     #[serde(default)]
@@ -147,6 +150,10 @@ pub fn image_entry_download_key(image: &ImageEntry) -> String {
 impl ImageEntry {
     pub fn effective_file_name(&self) -> &str {
         self.output_file.as_deref().unwrap_or(&self.file)
+    }
+
+    pub fn size(&self) -> Option<(i32, i32)> {
+        Some((self.width?, self.height?))
     }
 
     pub fn get_bboxes(&self) -> Vec<BoundingBox> {
@@ -635,8 +642,8 @@ mod tests {
                     file: format!("pose_{index}.jpg"),
                     output_file: None,
                     url: String::new(),
-                    width: 640,
-                    height: 480,
+                    width: Some(640),
+                    height: Some(480),
                     split: "train".to_string(),
                     annotations: Some(serde_json::json!({ "pose": [row] })),
                 }
@@ -805,8 +812,8 @@ mod tests {
         assert_eq!(result.metadata.name, "test");
         assert_eq!(result.images.len(), 1);
         assert_eq!(result.images[0].file, "img1.jpg");
-        assert_eq!(result.images[0].width, 640);
-        assert_eq!(result.images[0].height, 480);
+        assert_eq!(result.images[0].width, Some(640));
+        assert_eq!(result.images[0].height, Some(480));
     }
 
     #[test]
@@ -872,6 +879,26 @@ mod tests {
     }
 
     #[test]
+    fn image_sizes_are_optional_and_kept_when_declared() {
+        let content = r#"{"type":"dataset","name":"test","class_names":{}}
+{"file":"a.jpg","split":"train"}
+{"file":"b.jpg","width":640,"split":"train"}
+{"file":"c.jpg","width":640,"height":480,"split":"train"}"#;
+
+        let data = parse_ndjson(content).unwrap();
+
+        let sizes: Vec<_> = data
+            .images
+            .iter()
+            .map(|img| (img.width, img.height))
+            .collect();
+        assert_eq!(
+            sizes,
+            [(None, None), (Some(640), None), (Some(640), Some(480))]
+        );
+    }
+
+    #[test]
     fn parse_string_version() {
         let content = r#"{"type":"dataset","name":"test","class_names":{},"version":"latest"}"#;
         let result = parse_ndjson(content).unwrap();
@@ -934,8 +961,8 @@ mod tests {
             file: "test.jpg".to_string(),
             output_file: None,
             url: String::new(),
-            width: 640,
-            height: 480,
+            width: Some(640),
+            height: Some(480),
             split: "train".to_string(),
             annotations: Some(serde_json::json!({
                 "bboxes": [[0, 0.1, 0.2, 0.3, 0.4], [1, 0.5, 0.6, 0.7, 0.8]]
@@ -956,8 +983,8 @@ mod tests {
             file: "test.jpg".to_string(),
             output_file: None,
             url: String::new(),
-            width: 640,
-            height: 480,
+            width: Some(640),
+            height: Some(480),
             split: "train".to_string(),
             annotations: Some(serde_json::json!({
                 "boxes": [[2, 0.25, 0.35, 0.45, 0.55]]
@@ -978,8 +1005,8 @@ mod tests {
             file: "test.jpg".to_string(),
             output_file: None,
             url: String::new(),
-            width: 1200,
-            height: 800,
+            width: Some(1200),
+            height: Some(800),
             split: "train".to_string(),
             annotations: Some(serde_json::json!({
                 "pose": [[0, 0.5, 0.6, 0.3, 0.4, 0.1, 0.2, 2, 0.3, 0.4, 1, 0.5, 0.6, 0]]
@@ -1007,8 +1034,8 @@ mod tests {
             file: "test.jpg".to_string(),
             output_file: None,
             url: String::new(),
-            width: 640,
-            height: 480,
+            width: Some(640),
+            height: Some(480),
             split: "train".to_string(),
             annotations: Some(serde_json::json!({
                 "pose": [[0, 0.5, 0.6, 0.3, 0.4, 0.1, 0.2]]
@@ -1028,8 +1055,8 @@ mod tests {
             file: "img1.jpg".to_string(),
             output_file: Some("img1__abcd1234.jpg".to_string()),
             url: String::new(),
-            width: 640,
-            height: 480,
+            width: Some(640),
+            height: Some(480),
             split: "val".to_string(),
             annotations: None,
         };
@@ -1173,8 +1200,8 @@ mod tests {
             file: "test.jpg".to_string(),
             output_file: None,
             url: String::new(),
-            width: 640,
-            height: 640,
+            width: Some(640),
+            height: Some(640),
             split: "train".to_string(),
             annotations: Some(serde_json::json!({
                 "obb": [[0, 0.3, 0.6, 0.2, 0.7, 0.25, 0.7, 0.29, 0.63]]
@@ -1196,8 +1223,8 @@ mod tests {
             file: "test.jpg".to_string(),
             output_file: None,
             url: String::new(),
-            width: 640,
-            height: 640,
+            width: Some(640),
+            height: Some(640),
             split: "train".to_string(),
             annotations: Some(serde_json::json!({
                 "obb": [[0, 0.3, 0.6, 0.2, 0.7, 0.25]]
