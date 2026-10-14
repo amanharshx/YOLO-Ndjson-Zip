@@ -52,10 +52,16 @@ export interface ConvertError {
   failure_summary: FailureSummary | null;
 }
 
+export interface AutoValSplit {
+  moved: number;
+  train_images: number;
+}
+
 export interface ConvertResult {
   zip_path: string;
   omitted_images: number;
   renamed_images: number;
+  auto_val_split: AutoValSplit | null;
   failure_summary: FailureSummary;
 }
 

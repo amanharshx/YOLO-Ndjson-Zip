@@ -12,6 +12,11 @@ pub trait Converter {
         false
     }
 
+    /// Whether `convert` writes a `data.yaml` for `task`.
+    fn writes_data_yaml(&self, _task: &str) -> bool {
+        false
+    }
+
     fn convert(
         &self,
         data: &NDJSONData,

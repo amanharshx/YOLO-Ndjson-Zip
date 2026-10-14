@@ -355,6 +355,16 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
                           : `Renamed ${result.renamed_images} images whose file names clashed within a split.`}
                       </p>
                     )}
+                    {result.auto_val_split && (
+                      <p
+                        data-testid="auto-val-split"
+                        className="mt-3 text-left text-xs text-muted-foreground"
+                      >
+                        Moved {result.auto_val_split.moved} of{" "}
+                        {result.auto_val_split.train_images} train images to val
+                        because there were no val images to export.
+                      </p>
+                    )}
                     <Button
                       onClick={() => revealItemInDir(result.zip_path)}
                       variant="outline"

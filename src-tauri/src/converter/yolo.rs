@@ -166,6 +166,11 @@ impl YoloConverter {
 }
 
 impl Converter for YoloConverter {
+    fn writes_data_yaml(&self, task: &str) -> bool {
+        // Darknet has no YAML, and classify datasets are read from their folders.
+        !self.darknet && task != "classify"
+    }
+
     fn convert(
         &self,
         data: &NDJSONData,
@@ -183,7 +188,7 @@ impl Converter for YoloConverter {
             );
         } else {
             // Standard YOLO mode
-            if task != "classify" {
+            if self.writes_data_yaml(task) {
                 files.insert(
                     "data.yaml".to_string(),
                     self.create_data_yaml(data, &class_list).into_bytes(),

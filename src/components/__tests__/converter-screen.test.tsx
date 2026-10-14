@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConverterScreen, DownloadFailureDetails } from "../converter-screen";
+import type { AutoValSplit } from "@/lib/types";
 
 const useConverterMock = vi.hoisted(() => vi.fn());
 
@@ -171,7 +172,10 @@ describe("DownloadFailureDetails", () => {
 });
 
 describe("ConverterScreen success card", () => {
-  function renderSuccess(renamedImages: number) {
+  function renderSuccess(
+    renamedImages: number,
+    autoValSplit: AutoValSplit | null = null,
+  ) {
     useConverterMock.mockReturnValue({
       selectedFile: "/tmp/dataset.ndjson",
       selectedFileName: "dataset.ndjson",
@@ -183,6 +187,7 @@ describe("ConverterScreen success card", () => {
         zip_path: "/tmp/dataset.zip",
         omitted_images: 0,
         renamed_images: renamedImages,
+        auto_val_split: autoValSplit,
         failure_summary: { groups: [], expiry: null },
       },
       error: null,
@@ -221,5 +226,20 @@ describe("ConverterScreen success card", () => {
 
     expect(screen.getByTestId("success-card")).toBeInTheDocument();
     expect(screen.queryByTestId("renamed-images")).not.toBeInTheDocument();
+  });
+
+  it("reports train images moved to val when none were left to export", () => {
+    renderSuccess(0, { moved: 1, train_images: 10 });
+
+    expect(screen.getByTestId("auto-val-split")).toHaveTextContent(
+      "Moved 1 of 10 train images to val because there were no val images to export.",
+    );
+  });
+
+  it("hides the val notice when the export had a val split", () => {
+    renderSuccess(0);
+
+    expect(screen.getByTestId("success-card")).toBeInTheDocument();
+    expect(screen.queryByTestId("auto-val-split")).not.toBeInTheDocument();
   });
 });
