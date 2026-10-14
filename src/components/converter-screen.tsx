@@ -13,6 +13,7 @@ import {
 } from "@/lib/download-failures";
 import { useConverter } from "@/hooks/use-converter";
 import { ConverterHeader } from "@/components/converter-header";
+import type { AboutProps } from "@/components/about-dialog";
 import { FormatButton } from "@/components/format-button";
 import {
   FileJson,
@@ -115,7 +116,7 @@ export function DownloadFailureDetails({
   );
 }
 
-export function ConverterScreen({ onBack }: { onBack: () => void }) {
+export function ConverterScreen({ onBack, ...about }: { onBack: () => void } & AboutProps) {
   const {
     selectedFile,
     selectedFileName,
@@ -177,7 +178,7 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
   if (!selectedFile) {
     return (
       <div className="flex min-h-screen flex-col bg-background">
-        <ConverterHeader onBack={onBack} />
+        <ConverterHeader onBack={onBack} {...about} />
 
         <main className="flex flex-1 items-center justify-center px-4">
           <Card
@@ -211,7 +212,7 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
 
   return (
     <div className="min-h-screen bg-background">
-      <ConverterHeader onBack={onBack} />
+      <ConverterHeader onBack={onBack} {...about} />
 
       <main className="container mx-auto px-4 py-8">
         {/* Main Content */}

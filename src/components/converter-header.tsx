@@ -1,7 +1,7 @@
 import { ArrowRight } from "lucide-react";
-import { UpdateChecker } from "./update-checker";
+import { AboutButton, type AboutProps } from "./about-dialog";
 
-export function ConverterHeader({ onBack }: { onBack: () => void }) {
+export function ConverterHeader({ onBack, ...about }: { onBack: () => void } & AboutProps) {
   return (
     <header className="border-b bg-card">
       <div className="container mx-auto flex items-center justify-between px-4 py-3">
@@ -13,7 +13,7 @@ export function ConverterHeader({ onBack }: { onBack: () => void }) {
           Back
         </button>
         <div />
-        <UpdateChecker />
+        <AboutButton {...about} />
       </div>
     </header>
   );
