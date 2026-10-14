@@ -394,10 +394,13 @@ fn prepare_images_with_unique_output_names(images: &[ImageEntry]) -> Vec<ImageEn
 
         let mut prepared = image.clone();
         if !used_keys.insert(output_name_key(&image.file)) {
-            let hash_source = if image.url.is_empty() {
+            // Signed URLs get a new query string on every export; hashing without it
+            // keeps a renamed image's name the same across exports.
+            let url_without_query = image.url.split(['?', '#']).next().unwrap_or_default();
+            let hash_source = if url_without_query.is_empty() {
                 image.file.as_str()
             } else {
-                image.url.as_str()
+                url_without_query
             };
             prepared.output_file = Some(next_unique_file_name(&image.file, hash_source, used_keys));
         }
@@ -1070,6 +1073,45 @@ mod tests {
         assert_eq!(first, prepared_names(content));
         assert_eq!(first[0], "a.jpg");
         assert_eq!(first[1], "A__8fc54561.png");
+    }
+
+    #[test]
+    fn renamed_output_names_ignore_signed_url_query_strings() {
+        let export = |signature: &str| {
+            prepared_names(&format!(
+                r#"{{"type":"dataset","name":"signed","class_names":{{}}}}
+{{"type":"image","file":"a.jpg","width":640,"height":480,"split":"train","url":"https://storage.example/a.jpg{signature}"}}
+{{"type":"image","file":"a.png","width":640,"height":480,"split":"train","url":"https://storage.example/a.png{signature}"}}"#
+            ))
+        };
+
+        let unsigned = export("");
+        assert_eq!(unsigned[1], "a__1d4758da.png");
+        assert_eq!(export("?X-Goog-Signature=261bb218"), unsigned);
+        assert_eq!(export("?X-Goog-Signature=7c01e3aa#page"), unsigned);
+    }
+
+    #[test]
+    fn urls_differing_only_by_query_string_get_distinct_output_names() {
+        let names = prepared_names(
+            r#"{"type":"dataset","name":"signed","class_names":{}}
+{"type":"image","file":"a.jpg","width":640,"height":480,"split":"train","url":"https://storage.example/a.jpg"}
+{"type":"image","file":"a.png","width":640,"height":480,"split":"train","url":"https://storage.example/a.png?X-Goog-Signature=1"}
+{"type":"image","file":"a.png","width":640,"height":480,"split":"train","url":"https://storage.example/a.png?X-Goog-Signature=2"}"#,
+        );
+
+        assert_eq!(names, ["a.jpg", "a__1d4758da.png", "a__1d4758da__2.png"]);
+    }
+
+    #[test]
+    fn renamed_images_without_url_hash_their_file_name() {
+        let names = prepared_names(
+            r#"{"type":"dataset","name":"labels-only","class_names":{}}
+{"type":"image","file":"a.jpg","width":640,"height":480,"split":"train","url":""}
+{"type":"image","file":"a.png","width":640,"height":480,"split":"train","url":""}"#,
+        );
+
+        assert_eq!(names, ["a.jpg", "a__6ba85779.png"]);
     }
 
     #[test]
