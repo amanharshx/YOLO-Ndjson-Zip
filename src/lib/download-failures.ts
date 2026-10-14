@@ -80,7 +80,7 @@ function plural(count: number, singular: string, pluralForm = `${singular}s`) {
   return count === 1 ? singular : pluralForm;
 }
 
-function safeExample(value: string): string {
+export function safeExample(value: string): string {
   // Re-sanitize IPC data here so a backend regression cannot expose signed URLs.
   const basename = value.replace(/\\/g, "/").split("/").pop() || "unknown file";
   return basename.split(/[?#]/, 1)[0] || "unknown file";
@@ -148,14 +148,20 @@ function breakdownRemedy(kind: FailureKind): string {
   }
 }
 
+/** Appends up to 3 of `count` examples to `text`, saying "including" when some are left out. */
+export function withExamples(text: string, count: number, examples: string[]): string {
+  const shown = examples.slice(0, 3);
+  if (shown.length === 0) return text;
+  const prefix = count > shown.length ? ", including " : " — ";
+  return `${text}${prefix}${shown.join(", ")}`;
+}
+
 function formatBreakdown(group: FailureGroup): string {
-  const examples = group.examples.slice(0, 3).map(safeExample);
-  const label = breakdownLabel(group);
-  const examplesPrefix =
-    group.count > examples.length ? ", including " : " — ";
-  const cause = examples.length > 0
-    ? `${label}${examplesPrefix}${examples.join(", ")}`
-    : label;
+  const cause = withExamples(
+    breakdownLabel(group),
+    group.count,
+    group.examples.map(safeExample),
+  );
   return `${cause}. ${breakdownRemedy(group.kind)}`;
 }
 

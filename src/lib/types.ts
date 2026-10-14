@@ -57,10 +57,17 @@ export interface AutoValSplit {
   train_images: number;
 }
 
+export interface RenamedImage {
+  split: string;
+  file: string;
+  output_file: string;
+}
+
 export interface ConvertResult {
   zip_path: string;
   omitted_images: number;
   renamed_images: number;
+  renamed_examples: RenamedImage[];
   unlabeled_images: number;
   auto_val_split: AutoValSplit | null;
   failure_summary: FailureSummary;

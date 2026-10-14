@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConverterScreen, DownloadFailureDetails } from "../converter-screen";
-import type { AutoValSplit } from "@/lib/types";
+import type { AutoValSplit, RenamedImage } from "@/lib/types";
 
 const useConverterMock = vi.hoisted(() => vi.fn());
 
@@ -176,6 +176,7 @@ describe("ConverterScreen success card", () => {
     renamedImages: number,
     autoValSplit: AutoValSplit | null = null,
     unlabeledImages = 0,
+    renamedExamples: RenamedImage[] = [],
   ) {
     useConverterMock.mockReturnValue({
       selectedFile: "/tmp/dataset.ndjson",
@@ -188,6 +189,7 @@ describe("ConverterScreen success card", () => {
         zip_path: "/tmp/dataset.zip",
         omitted_images: 0,
         renamed_images: renamedImages,
+        renamed_examples: renamedExamples,
         unlabeled_images: unlabeledImages,
         auto_val_split: autoValSplit,
         failure_summary: { groups: [], expiry: null },
@@ -220,6 +222,30 @@ describe("ConverterScreen success card", () => {
 
     expect(screen.getByTestId("renamed-images")).toHaveTextContent(
       "Renamed 1 image whose file name clashed within a split.",
+    );
+  });
+
+  it("names the renamed image with its split and new name", () => {
+    renderSuccess(1, null, 0, [
+      { split: "train", file: "a.png", output_file: "a__261bb218.png" },
+    ]);
+
+    expect(screen.getByTestId("renamed-images")).toHaveTextContent(
+      "Renamed 1 image whose file name clashed within a split — train/a.png → a__261bb218.png.",
+    );
+  });
+
+  it("names the first renamed images when there are more", () => {
+    renderSuccess(5, null, 0, [
+      { split: "train", file: "a.png", output_file: "a__261bb218.png" },
+      { split: "valid", file: "B.png", output_file: "B__0c4a1f2e.png" },
+      { split: "train", file: "a.gif", output_file: "a__9e8d7c6b.gif" },
+    ]);
+
+    expect(screen.getByTestId("renamed-images")).toHaveTextContent(
+      "Renamed 5 images whose file names clashed within a split, including " +
+        "train/a.png → a__261bb218.png, valid/B.png → B__0c4a1f2e.png, " +
+        "train/a.gif → a__9e8d7c6b.gif.",
     );
   });
 
