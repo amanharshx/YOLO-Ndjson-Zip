@@ -1932,4 +1932,32 @@ mod tests {
         assert_eq!(files["train/depth/a.png"], b"train/depth/a.png");
         assert_eq!(files[&renamed_depth], renamed_depth.as_bytes());
     }
+
+    #[test]
+    fn nested_images_folder_gets_its_depth_map_where_ultralytics_looks() {
+        let mut data = depth_data("");
+        data.images[0].file = r"scans\images/a.jpg".to_string();
+
+        let files = get_converter("yolo")
+            .unwrap()
+            .convert(&data, &depth_downloads(&data));
+
+        // Ultralytics swaps the last `images` folder of the image path for `depth`.
+        let depth = "train/images/scans/depth/a.png";
+        let zip_paths: Vec<String> = sorted_paths(&files)
+            .into_iter()
+            .map(|path| crate::normalize_zip_path(path).unwrap())
+            .collect();
+        assert!(zip_paths.contains(&depth.to_string()), "{zip_paths:?}");
+        assert!(zip_paths.contains(&"train/images/scans/images/a.jpg".to_string()));
+        // The progress label names the same path.
+        let depth_entry = files
+            .iter()
+            .find(|(path, _)| crate::normalize_zip_path(path).unwrap() == depth)
+            .unwrap();
+        assert_eq!(
+            crate::normalize_zip_path(std::str::from_utf8(depth_entry.1).unwrap()).unwrap(),
+            depth
+        );
+    }
 }

@@ -1,6 +1,6 @@
 use super::{classify_folder_names, get_class_list, Converter};
 use crate::parser::{
-    depth_download_key, depth_file_name, image_download_key, output_stem, ImageEntry, NDJSONData,
+    depth_download_key, depth_zip_path, image_download_key, output_stem, ImageEntry, NDJSONData,
 };
 use std::collections::HashMap;
 
@@ -259,7 +259,7 @@ impl Converter for YoloConverter {
                                 image_download_key(split, image_file),
                             ),
                             (
-                                format!("{}/depth/{}", split, depth_file_name(image_file)),
+                                depth_zip_path(split, image_file),
                                 depth_download_key(split, image_file),
                             ),
                         ];

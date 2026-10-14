@@ -269,7 +269,7 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
                         <div className="flex justify-between text-sm">
                           <span className="font-medium">
                             {progress.phase === "downloading"
-                              ? "Downloading Images"
+                              ? "Downloading Files"
                               : progress.phase === "converting"
                                 ? "Converting Annotations"
                                 : progress.phase === "zipping"
@@ -293,7 +293,7 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
                               {formatElapsedTime(elapsedSeconds)}
                             </span>
                             {progress.phase === "downloading" && (
-                              <span>{getDownloadRate()} img/s</span>
+                              <span>{getDownloadRate()} files/s</span>
                             )}
                           </div>
                         </div>
@@ -312,7 +312,7 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
                       <>
                         <Loader2 className="mr-2 h-5 w-5 animate-spin" />
                         {progress?.phase === "downloading"
-                          ? "Downloading Images..."
+                          ? "Downloading Files..."
                           : progress?.phase === "converting"
                             ? "Converting..."
                             : progress?.phase === "zipping"

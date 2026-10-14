@@ -269,3 +269,34 @@ describe("ConverterScreen success card", () => {
     expect(screen.queryByTestId("unlabeled-images")).not.toBeInTheDocument();
   });
 });
+
+describe("ConverterScreen download progress", () => {
+  it("counts downloads as files, since depth maps download with their images", () => {
+    useConverterMock.mockReturnValue({
+      selectedFile: "/tmp/dataset.ndjson",
+      selectedFileName: "dataset.ndjson",
+      selectedFormat: { id: "yolo", name: "YOLO26" },
+      setSelectedFormat: vi.fn(),
+      isConverting: true,
+      progress: { phase: "downloading", current: 3, total: 4, item: "train/depth/a.png" },
+      result: null,
+      error: null,
+      elapsedSeconds: 0,
+      selectFile: vi.fn(),
+      removeFile: vi.fn(),
+      setFileFromPath: vi.fn(),
+      handleConvert: vi.fn(),
+      resetState: vi.fn(),
+      getProgressPercentage: vi.fn(() => 75),
+      formatElapsedTime: vi.fn(() => "0:01"),
+      getDownloadRate: vi.fn(() => "2.0"),
+    });
+
+    render(<ConverterScreen onBack={vi.fn()} />);
+
+    expect(screen.getByText("Downloading Files")).toBeInTheDocument();
+    expect(screen.getByText("3 / 4")).toBeInTheDocument();
+    expect(screen.getByText("2.0 files/s")).toBeInTheDocument();
+    expect(screen.getByTestId("convert-button")).toHaveTextContent("Downloading Files...");
+  });
+});

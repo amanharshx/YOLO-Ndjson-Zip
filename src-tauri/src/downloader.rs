@@ -1,11 +1,11 @@
 use crate::parser::{
-    depth_download_key, depth_file_name, image_entry_download_key, normalize_split, ImageEntry,
+    depth_download_key, depth_zip_path, image_entry_download_key, normalize_split, ImageEntry,
 };
 use chrono::{DateTime, Utc};
 use futures::stream::{self, StreamExt};
 use reqwest::{header::RETRY_AFTER, Client, StatusCode};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -169,7 +169,7 @@ impl DownloadRequest {
         Self {
             key: depth_download_key(split, file),
             image_key: image_entry_download_key(image),
-            label: format!("{}/depth/{}", split, depth_file_name(file)),
+            label: depth_zip_path(split, file),
             name: format!("{} (depth map)", file),
             url: image.depth_url().unwrap_or_default().to_string(),
         }
@@ -432,10 +432,17 @@ impl Downloader {
         let mut ready_downloads = Vec::with_capacity(requests_with_urls.len());
         let mut expired_urls = 0usize;
         let mut latest_expired_at = None;
+        // Links are expired for every image when each lost a file to expiry.
+        let images_with_urls: HashSet<&str> = requests_with_urls
+            .iter()
+            .map(|request| request.image_key.as_str())
+            .collect();
+        let mut expired_images = HashSet::new();
         for request in requests_with_urls {
             match parse_url_expiry(&request.url, now) {
                 UrlExpiry::Expired(expires_at) => {
                     expired_urls += 1;
+                    expired_images.insert(request.image_key.as_str());
                     latest_expired_at = Some(
                         latest_expired_at
                             .map_or(expires_at, |current: DateTime<Utc>| current.max(expires_at)),
@@ -451,7 +458,7 @@ impl Downloader {
             }
         }
         let expiry = (expired_urls > 0).then(|| ExpirySummary {
-            all_expired: expired_urls == total as usize,
+            all_expired: expired_images.len() == images_with_urls.len(),
             latest_expired_at: latest_expired_at.map(|value| value.timestamp()),
         });
 
@@ -1514,5 +1521,25 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn image_whose_own_link_expired_counts_as_expired_whatever_its_depth_link() {
+        let expired = Utc::now().timestamp() - CLOCK_SKEW_TOLERANCE_SECS - 1;
+        let image: ImageEntry = serde_json::from_str(&format!(
+            r#"{{"file":"a.jpg","split":"train","url":"https://cdn.example/a.jpg?Expires={expired}","depth":{{"url":"http://127.0.0.1/a.png"}}}}"#
+        ))
+        .unwrap();
+        let requests = [
+            DownloadRequest::image(&image),
+            DownloadRequest::depth_map(&image),
+        ];
+
+        let result = Downloader::new(1)
+            .unwrap()
+            .download_all(&requests, &Channel::new(|_| Ok(())))
+            .await;
+
+        assert!(result.failure_summary.expiry.unwrap().all_expired);
     }
 }

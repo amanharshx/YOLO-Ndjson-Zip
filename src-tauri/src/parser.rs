@@ -179,8 +179,22 @@ pub fn image_entry_download_key(image: &ImageEntry) -> String {
 }
 
 /// Name of the depth map paired with an image: Ultralytics looks for its stem plus `.png`.
-pub fn depth_file_name(image_file: &str) -> String {
+fn depth_file_name(image_file: &str) -> String {
     format!("{}.png", output_stem(image_file))
+}
+
+/// ZIP path of the depth map paired with the image at `{split}/images/{image_file}`, where
+/// Ultralytics looks for it: the last `images` folder becomes `depth`, the extension `.png`.
+pub fn depth_zip_path(split: &str, image_file: &str) -> String {
+    let image_path = format!("{}/images/{}", normalize_split(split), image_file);
+    // ZIP paths treat `\` as a folder separator too.
+    let mut parts: Vec<&str> = image_path.split(['/', '\\']).collect();
+    if let Some(folder) = parts.iter_mut().rev().find(|part| **part == "images") {
+        *folder = "depth";
+    }
+    let name = depth_file_name(parts.pop().unwrap_or_default());
+    parts.push(&name);
+    parts.join("/")
 }
 
 /// Download key of the depth map paired with an image. Its `{split}/depth` pseudo split is
