@@ -12,6 +12,8 @@ pub enum ParseError {
     InvalidPose(String),
     #[error("Invalid split: {0}")]
     InvalidSplit(String),
+    #[error("Invalid class ID: {0}")]
+    InvalidClassId(String),
     #[error("Invalid record on line {line}: {message}")]
     InvalidRecord { line: usize, message: String },
 }
@@ -155,6 +157,10 @@ pub struct ImageEntry {
 
 const ACCEPTED_SPLITS: [&str; 4] = ["train", "val", "valid", "test"];
 
+/// Largest accepted class ID. Class lists name every ID up to the largest one, so an
+/// unbounded ID would allocate one name per ID.
+const MAX_CLASS_ID: i64 = 100_000;
+
 pub fn normalize_split(split: &str) -> &str {
     match split {
         "val" | "valid" => "valid",
@@ -260,21 +266,33 @@ impl ImageEntry {
     }
 
     /// Class IDs of every annotation row, whatever the task (as Ultralytics collects them).
+    /// `parse_ndjson` has checked they fit `i32`.
     pub fn annotation_class_ids(&self) -> impl Iterator<Item = i32> + '_ {
+        self.annotation_class_id_values()
+            .filter_map(|(_, id)| id.as_i64())
+            .map(|id| id as i32)
+    }
+
+    /// Raw class ID of every annotation row and classification value, with its annotation key.
+    fn annotation_class_id_values(
+        &self,
+    ) -> impl Iterator<Item = (&'static str, &serde_json::Value)> + '_ {
         let annotations = self.annotations.as_ref();
         let row_ids = ["boxes", "bboxes", "segments", "pose", "obb"]
             .into_iter()
-            .filter_map(move |key| annotations?.get(key)?.as_array())
-            .flatten()
-            .filter_map(|row| row.as_array()?.first()?.as_i64());
+            .filter_map(move |kind| Some((kind, annotations?.get(kind)?.as_array()?)))
+            .flat_map(|(kind, rows)| {
+                rows.iter()
+                    .filter_map(move |row| Some((kind, row.as_array()?.first()?)))
+            });
         let classification_ids = annotations
             .and_then(|annotations| annotations.get("classification"))
             .and_then(serde_json::Value::as_array)
             .into_iter()
             .flatten()
-            .filter_map(serde_json::Value::as_i64);
+            .map(|id| ("classification", id));
 
-        row_ids.chain(classification_ids).map(|id| id as i32)
+        row_ids.chain(classification_ids)
     }
 
     pub fn get_classifications(&self) -> Vec<i32> {
@@ -512,17 +530,6 @@ impl NDJSONData {
                         row_index + 1
                     )));
                 }
-                if values[0]
-                    .as_i64()
-                    .and_then(|class_id| i32::try_from(class_id).ok())
-                    .is_none()
-                {
-                    return Err(ParseError::InvalidPose(format!(
-                        "image '{}', pose row {} class ID must be an integer in the i32 range",
-                        image.file,
-                        row_index + 1
-                    )));
-                }
                 if values.iter().any(|value| value.as_f64().is_none()) {
                     return Err(ParseError::InvalidPose(format!(
                         "image '{}', pose row {} contains a non-numeric value",
@@ -645,6 +652,7 @@ pub fn parse_ndjson(content: &str) -> Result<NDJSONData, ParseError> {
     }
 
     validate_splits(&images)?;
+    validate_class_ids(&metadata, &images)?;
 
     Ok(NDJSONData { metadata, images })
 }
@@ -689,6 +697,47 @@ fn validate_splits(images: &[ImageEntry]) -> Result<(), ParseError> {
         problem,
         count,
         ACCEPTED_SPLITS.join(", ")
+    )))
+}
+
+fn is_valid_class_id(id: i64) -> bool {
+    (0..=MAX_CLASS_ID).contains(&id)
+}
+
+/// Rejects class IDs that aren't integers from 0 to `MAX_CLASS_ID` before download, so none
+/// is dropped, written unchanged, wrapped into another class, or grown into a huge class list.
+fn validate_class_ids(metadata: &DatasetMetadata, images: &[ImageEntry]) -> Result<(), ParseError> {
+    // Sorted, so the first key reported doesn't depend on map order.
+    let mut keys: Vec<&String> = metadata.class_names.keys().collect();
+    keys.sort();
+    // Only the plain form, so `"5"` and `"05"` can't both name class 5.
+    let invalid_keys = keys
+        .into_iter()
+        .filter(|key| {
+            !key.parse()
+                .is_ok_and(|id| is_valid_class_id(id) && id.to_string() == **key)
+        })
+        .map(|key| format!("class_names key '{}'", key));
+    let invalid_rows = images.iter().flat_map(|image| {
+        image
+            .annotation_class_id_values()
+            .filter(|(_, id)| !id.as_i64().is_some_and(is_valid_class_id))
+            .map(move |(kind, id)| format!("image '{}' has {} class {}", image.file, kind, id))
+    });
+    let mut invalid = invalid_keys.chain(invalid_rows);
+    let Some(first) = invalid.next() else {
+        return Ok(());
+    };
+    let affected = 1 + invalid.count();
+    let count = if affected > 1 {
+        format!(" ({} invalid class IDs)", affected)
+    } else {
+        String::new()
+    };
+
+    Err(ParseError::InvalidClassId(format!(
+        "{}{}. Class IDs must be integers from 0 to {}.",
+        first, count, MAX_CLASS_ID
     )))
 }
 
@@ -863,17 +912,6 @@ mod tests {
             let error = data.pose_kpt_shape().unwrap_err().to_string();
             assert!(error.contains(&format!("got {:?}", malformed)));
         }
-    }
-
-    #[test]
-    fn pose_kpt_shape_rejects_non_integer_class_id_with_location() {
-        let mut data = pose_data(None, vec![keypoint_payload(17, 3)]);
-        data.images[0].annotations.as_mut().unwrap()["pose"][0][0] = serde_json::json!(0.5);
-
-        let error = data.pose_kpt_shape().unwrap_err().to_string();
-        assert!(error.contains("pose_0.jpg"));
-        assert!(error.contains("pose row 1"));
-        assert!(error.contains("class ID must be an integer"));
     }
 
     #[test]
@@ -1357,5 +1395,84 @@ mod tests {
         let data = parse_ndjson(r#"{"type":"dataset","task":"detect","depth_scale":true}"#);
 
         assert!(data.is_ok());
+    }
+
+    fn parse_class_id_error(content: &str) -> String {
+        let error = parse_ndjson(content).unwrap_err();
+        assert!(matches!(error, ParseError::InvalidClassId(_)), "{error}");
+        error.to_string()
+    }
+
+    #[test]
+    fn invalid_class_names_key_is_rejected_naming_the_key() {
+        for key in ["200000", "a", "05", "+5", "-0"] {
+            let error = parse_class_id_error(&format!(
+                r#"{{"type":"dataset","class_names":{{"0":"cat","{key}":"dog"}}}}"#
+            ));
+
+            assert_eq!(
+                error,
+                format!(
+                    "Invalid class ID: class_names key '{key}'. \
+                     Class IDs must be integers from 0 to 100000."
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_annotation_class_ids_are_rejected_naming_value_file_and_kind() {
+        let cases = [
+            ("boxes", "[[-1,0.5,0.5,0.2,0.2]]", "-1"),
+            ("bboxes", "[[-1,0.5,0.5,0.2,0.2]]", "-1"),
+            ("segments", "[[-1,0.1,0.1,0.9,0.1,0.5,0.9]]", "-1"),
+            ("pose", "[[-1,0.5,0.5,0.4,0.4,0.1,0.2,2]]", "-1"),
+            ("obb", "[[-1,0.1,0.1,0.9,0.1,0.9,0.9,0.1,0.9]]", "-1"),
+            ("classification", "[1.5]", "1.5"),
+            ("boxes", "[[100001,0.5,0.5,0.2,0.2]]", "100001"),
+            ("boxes", "[[2000000000,0.5,0.5,0.2,0.2]]", "2000000000"),
+            ("boxes", "[[4294967298,0.5,0.5,0.2,0.2]]", "4294967298"),
+            ("boxes", "[[2.0,0.5,0.5,0.2,0.2]]", "2.0"),
+            ("classification", r#"["cat"]"#, r#""cat""#),
+        ];
+        for (kind, rows, value) in cases {
+            let error = parse_class_id_error(&format!(
+                r#"{{"type":"dataset","class_names":{{"0":"cat","1":"dog","2":"bird"}}}}
+{{"file":"a.jpg","split":"train","annotations":{{"{kind}":{rows}}}}}"#
+            ));
+
+            assert_eq!(
+                error,
+                format!(
+                    "Invalid class ID: image 'a.jpg' has {kind} class {value}. \
+                     Class IDs must be integers from 0 to 100000."
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn several_invalid_class_ids_report_the_first_and_the_total() {
+        let error = parse_class_id_error(
+            r#"{"type":"dataset","class_names":{"x":"cat","0":"dog"}}
+{"file":"a.jpg","split":"train","annotations":{"boxes":[[0,0.5,0.5,0.2,0.2],[-1,0.5,0.5,0.2,0.2]]}}
+{"file":"b.jpg","split":"val","annotations":{"classification":[1.5,7]}}"#,
+        );
+
+        assert_eq!(
+            error,
+            "Invalid class ID: class_names key 'x' (3 invalid class IDs). \
+             Class IDs must be integers from 0 to 100000."
+        );
+    }
+
+    #[test]
+    fn class_ids_from_zero_to_the_limit_are_accepted() {
+        let data = parse_ndjson(
+            r#"{"type":"dataset","class_names":{"0":"cat","100000":"dog"}}
+{"file":"a.jpg","split":"train","annotations":{"boxes":[[100000,0.5,0.5,0.2,0.2]],"classification":[0]}}"#,
+        );
+
+        assert!(data.is_ok(), "{:?}", data.err());
     }
 }
