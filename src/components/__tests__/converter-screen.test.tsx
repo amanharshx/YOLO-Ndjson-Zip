@@ -169,3 +169,57 @@ describe("DownloadFailureDetails", () => {
     expect(screen.getByText("Download details")).toBeInTheDocument();
   });
 });
+
+describe("ConverterScreen success card", () => {
+  function renderSuccess(renamedImages: number) {
+    useConverterMock.mockReturnValue({
+      selectedFile: "/tmp/dataset.ndjson",
+      selectedFileName: "dataset.ndjson",
+      selectedFormat: { id: "yolo", name: "YOLO26" },
+      setSelectedFormat: vi.fn(),
+      isConverting: false,
+      progress: null,
+      result: {
+        zip_path: "/tmp/dataset.zip",
+        omitted_images: 0,
+        renamed_images: renamedImages,
+        failure_summary: { groups: [], expiry: null },
+      },
+      error: null,
+      elapsedSeconds: 0,
+      selectFile: vi.fn(),
+      removeFile: vi.fn(),
+      setFileFromPath: vi.fn(),
+      handleConvert: vi.fn(),
+      resetState: vi.fn(),
+      getProgressPercentage: vi.fn(),
+      formatElapsedTime: vi.fn(),
+      getDownloadRate: vi.fn(),
+    });
+
+    render(<ConverterScreen onBack={vi.fn()} />);
+  }
+
+  it("reports images renamed to avoid file name clashes", () => {
+    renderSuccess(2);
+
+    expect(screen.getByTestId("renamed-images")).toHaveTextContent(
+      "Renamed 2 images whose file names clashed within a split.",
+    );
+  });
+
+  it("uses the singular for one renamed image", () => {
+    renderSuccess(1);
+
+    expect(screen.getByTestId("renamed-images")).toHaveTextContent(
+      "Renamed 1 image whose file name clashed within a split.",
+    );
+  });
+
+  it("hides the rename report when nothing was renamed", () => {
+    renderSuccess(0);
+
+    expect(screen.getByTestId("success-card")).toBeInTheDocument();
+    expect(screen.queryByTestId("renamed-images")).not.toBeInTheDocument();
+  });
+});

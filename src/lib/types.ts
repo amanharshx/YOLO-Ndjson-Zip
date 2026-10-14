@@ -55,6 +55,7 @@ export interface ConvertError {
 export interface ConvertResult {
   zip_path: string;
   omitted_images: number;
+  renamed_images: number;
   failure_summary: FailureSummary;
 }
 

@@ -4,7 +4,7 @@ mod parser;
 
 use converter::{check_task_format, get_class_list, get_converter};
 use downloader::{DownloadResult, Downloader, FailureSummary, ProgressEvent};
-use parser::{normalize_split, parse_ndjson, ImageEntry, NDJSONData, ParseError};
+use parser::{normalize_split, output_stem, parse_ndjson, ImageEntry, NDJSONData, ParseError};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Write;
@@ -20,6 +20,7 @@ const MAX_DOWNLOAD_CONCURRENCY: usize = 20;
 pub struct ConvertResult {
     pub zip_path: String,
     pub omitted_images: usize,
+    pub renamed_images: usize,
     pub failure_summary: FailureSummary,
 }
 
@@ -141,19 +142,16 @@ fn short_stable_hash(input: &str) -> String {
     format!("{:08x}", (hash & 0xffff_ffff) as u32)
 }
 
+/// Appends `suffix` to the output stem, so every suffix yields a new `output_name_key`.
 fn file_name_with_suffix(file_name: &str, suffix: &str) -> String {
-    match file_name.rsplit_once('.') {
-        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => {
-            format!("{}__{}.{}", stem, suffix, ext)
-        }
-        _ => format!("{}__{}", file_name, suffix),
-    }
+    let stem = output_stem(file_name);
+    format!("{}__{}{}", stem, suffix, &file_name[stem.len()..])
 }
 
 fn next_unique_file_name(
     original_file: &str,
     hash_source: &str,
-    used_names: &mut HashSet<String>,
+    used_keys: &mut HashSet<String>,
 ) -> String {
     let hash = short_stable_hash(hash_source);
     let mut suffix = hash.clone();
@@ -161,7 +159,7 @@ fn next_unique_file_name(
 
     loop {
         let candidate = file_name_with_suffix(original_file, &suffix);
-        if used_names.insert(candidate.clone()) {
+        if used_keys.insert(output_name_key(&candidate)) {
             return candidate;
         }
         suffix = format!("{}__{}", hash, counter);
@@ -210,38 +208,30 @@ fn validate_pose_dataset(data: &mut NDJSONData) -> Result<(), ParseError> {
     Ok(())
 }
 
+/// Key under which output names clash: label and XML files are named by stem, and
+/// macOS and Windows extract ZIPs case-insensitively.
+fn output_name_key(file_name: &str) -> String {
+    output_stem(file_name).to_lowercase()
+}
+
 fn prepare_images_with_unique_output_names(images: &[ImageEntry]) -> Vec<ImageEntry> {
-    let mut seen_entries: HashMap<(String, String), usize> = HashMap::new();
-    let mut used_names_by_split: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut used_keys_by_split: HashMap<&str, HashSet<String>> = HashMap::new();
     let mut prepared_images = Vec::with_capacity(images.len());
 
     for image in images {
-        let split_key = normalize_split(&image.split).to_string();
-        let used_names = used_names_by_split.entry(split_key.clone()).or_default();
-        let dedupe_key = (split_key, image.file.clone());
-        let occurrence = seen_entries.entry(dedupe_key).or_insert(0);
+        let used_keys = used_keys_by_split
+            .entry(normalize_split(&image.split))
+            .or_default();
 
         let mut prepared = image.clone();
-        if *occurrence == 0 {
-            if !used_names.insert(image.file.clone()) {
-                let hash_source = if image.url.is_empty() {
-                    image.file.as_str()
-                } else {
-                    image.url.as_str()
-                };
-                prepared.output_file =
-                    Some(next_unique_file_name(&image.file, hash_source, used_names));
-            }
-        } else {
+        if !used_keys.insert(output_name_key(&image.file)) {
             let hash_source = if image.url.is_empty() {
                 image.file.as_str()
             } else {
                 image.url.as_str()
             };
-            prepared.output_file =
-                Some(next_unique_file_name(&image.file, hash_source, used_names));
+            prepared.output_file = Some(next_unique_file_name(&image.file, hash_source, used_keys));
         }
-        *occurrence += 1;
         prepared_images.push(prepared);
     }
 
@@ -350,6 +340,11 @@ async fn convert_ndjson(
     let omitted_images =
         filter_images_without_downloads(&mut data, &download_result.files, include_images);
     let kept_image_count = data.images.len();
+    let renamed_images = data
+        .images
+        .iter()
+        .filter(|image| image.output_file.is_some())
+        .count();
     validate_downloaded_image_count(
         include_images,
         original_image_count,
@@ -451,6 +446,7 @@ async fn convert_ndjson(
     Ok(ConvertResult {
         zip_path: output_path.to_string_lossy().to_string(),
         omitted_images,
+        renamed_images,
         failure_summary,
     })
 }
@@ -478,7 +474,7 @@ mod tests {
     use crate::converter::{get_class_list, get_converter};
     use crate::downloader::{FailureGroup, FailureKind, FailureSummary};
     use crate::parser::{image_entry_download_key, parse_ndjson};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     fn partial_download_data() -> crate::parser::NDJSONData {
         parse_ndjson(
@@ -754,5 +750,137 @@ mod tests {
             prepared[2].effective_file_name(),
             file_name_with_suffix("img1.jpg", &format!("{}__2", hash))
         );
+    }
+
+    fn prepared_names(content: &str) -> Vec<String> {
+        let data = parse_ndjson(content).unwrap();
+        prepare_images_with_unique_output_names(&data.images)
+            .iter()
+            .map(|image| image.effective_file_name().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn names_differing_only_by_case_get_distinct_output_names() {
+        let names = prepared_names(
+            r#"{"type":"dataset","name":"case","class_names":{}}
+{"type":"image","file":"A.jpg","width":640,"height":480,"split":"train","url":"https://cdn.example/A.jpg"}
+{"type":"image","file":"a.jpg","width":640,"height":480,"split":"train","url":"https://cdn.example/a.jpg"}
+{"type":"image","file":"b.JPG","width":640,"height":480,"split":"train","url":"https://cdn.example/b.JPG"}
+{"type":"image","file":"B.png","width":640,"height":480,"split":"train","url":"https://cdn.example/B.png"}"#,
+        );
+
+        assert_eq!(names[0], "A.jpg");
+        assert_eq!(names[2], "b.JPG");
+        let names_lower: HashSet<String> = names.iter().map(|name| name.to_lowercase()).collect();
+        let stems_lower: HashSet<&str> = names_lower
+            .iter()
+            .map(|name| name.rsplit_once('.').unwrap().0)
+            .collect();
+        assert_eq!((names_lower.len(), stems_lower.len()), (4, 4), "{names:?}");
+    }
+
+    #[test]
+    fn same_names_in_different_splits_are_not_renamed() {
+        let names = prepared_names(
+            r#"{"type":"dataset","name":"splits","class_names":{}}
+{"type":"image","file":"a.jpg","width":640,"height":480,"split":"train","url":"https://cdn.example/1.jpg"}
+{"type":"image","file":"a.png","width":640,"height":480,"split":"val","url":"https://cdn.example/2.png"}
+{"type":"image","file":"A.jpg","width":640,"height":480,"split":"test","url":"https://cdn.example/3.jpg"}"#,
+        );
+
+        assert_eq!(names, ["a.jpg", "a.png", "A.jpg"]);
+    }
+
+    #[test]
+    fn val_and_valid_share_output_names() {
+        let names = prepared_names(
+            r#"{"type":"dataset","name":"splits","class_names":{}}
+{"type":"image","file":"a.jpg","width":640,"height":480,"split":"val","url":"https://cdn.example/1.jpg"}
+{"type":"image","file":"a.png","width":640,"height":480,"split":"valid","url":"https://cdn.example/2.png"}"#,
+        );
+
+        assert_eq!(names[0], "a.jpg");
+        assert_eq!(
+            names[1],
+            file_name_with_suffix("a.png", &short_stable_hash("https://cdn.example/2.png"))
+        );
+    }
+
+    #[test]
+    fn output_names_are_deterministic() {
+        let content = r#"{"type":"dataset","name":"repeat","class_names":{}}
+{"type":"image","file":"a.jpg","width":640,"height":480,"split":"train","url":"https://cdn.example/1.jpg"}
+{"type":"image","file":"A.png","width":640,"height":480,"split":"train","url":"https://cdn.example/2.png"}
+{"type":"image","file":"a.jpeg","width":640,"height":480,"split":"train","url":"https://cdn.example/3.jpeg"}"#;
+
+        let first = prepared_names(content);
+        assert_eq!(first, prepared_names(content));
+        assert_eq!(first[0], "a.jpg");
+        assert_eq!(first[1], "A__8fc54561.png");
+    }
+
+    #[test]
+    fn names_with_empty_stems_get_distinct_output_names() {
+        let names = prepared_names(
+            r#"{"type":"dataset","name":"dotfiles","class_names":{}}
+{"type":"image","file":".jpg","width":640,"height":480,"split":"train","url":"https://cdn.example/1.jpg"}
+{"type":"image","file":".png","width":640,"height":480,"split":"train","url":"https://cdn.example/2.png"}"#,
+        );
+
+        assert_eq!(names[0], ".jpg");
+        assert_eq!(
+            names[1],
+            format!("__{}.png", short_stable_hash("https://cdn.example/2.png"))
+        );
+    }
+
+    #[test]
+    fn same_stem_images_get_their_own_annotation_files() {
+        let content = r#"{"type":"dataset","task":"detect","name":"stems","class_names":{"0":"cat","1":"dog"}}
+{"type":"image","file":"a.jpg","width":640,"height":480,"split":"train","url":"https://cdn.example/a.jpg","annotations":{"boxes":[[0,0.5,0.5,0.2,0.2]]}}
+{"type":"image","file":"a.png","width":640,"height":480,"split":"train","url":"https://cdn.example/a.png","annotations":{"boxes":[[1,0.4,0.4,0.3,0.3]]}}"#;
+        let mut data = parse_ndjson(content).unwrap();
+        data.images = prepare_images_with_unique_output_names(&data.images);
+        let renamed =
+            file_name_with_suffix("a.png", &short_stable_hash("https://cdn.example/a.png"));
+        assert_eq!(data.images[0].effective_file_name(), "a.jpg");
+        assert_eq!(data.images[1].effective_file_name(), renamed);
+        let renamed_stem = renamed.trim_end_matches(".png");
+
+        let text = |files: &HashMap<String, Vec<u8>>, path: &str| {
+            String::from_utf8(
+                files
+                    .get(path)
+                    .unwrap_or_else(|| panic!("missing {path}"))
+                    .clone(),
+            )
+            .unwrap()
+        };
+        for (format, label_dir) in [("yolo", "train/labels/"), ("yolo_darknet", "train/")] {
+            let files = get_converter(format)
+                .unwrap()
+                .convert(&data, &HashMap::new());
+            assert_eq!(
+                text(&files, &format!("{label_dir}a.txt")),
+                "0 0.500000 0.500000 0.200000 0.200000",
+                "{format}"
+            );
+            assert_eq!(
+                text(&files, &format!("{label_dir}{renamed_stem}.txt")),
+                "1 0.400000 0.400000 0.300000 0.300000",
+                "{format}"
+            );
+        }
+
+        let files = get_converter("pascal_voc")
+            .unwrap()
+            .convert(&data, &HashMap::new());
+        let first = text(&files, "train/a.xml");
+        let second = text(&files, &format!("train/{renamed_stem}.xml"));
+        assert!(first.contains("<filename>a.jpg</filename>") && first.contains("<name>cat</name>"));
+        assert!(!first.contains("<name>dog</name>"));
+        assert!(second.contains(&format!("<filename>{renamed}</filename>")));
+        assert!(second.contains("<name>dog</name>") && !second.contains("<name>cat</name>"));
     }
 }
