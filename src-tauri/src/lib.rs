@@ -15,12 +15,23 @@ use zip::ZipWriter;
 
 const MAX_NDJSON_BYTES: u64 = 100 * 1024 * 1024; // 100 MiB
 const MAX_DOWNLOAD_CONCURRENCY: usize = 20;
+/// One in this many train images moves to val when an export has none, as in Ultralytics.
+const AUTO_VAL_SHARE: usize = 10;
+
+/// Train images moved to val because no val images were left to export.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct AutoValSplit {
+    pub moved: usize,
+    /// Train images before the move.
+    pub train_images: usize,
+}
 
 #[derive(Debug, Serialize)]
 pub struct ConvertResult {
     pub zip_path: String,
     pub omitted_images: usize,
     pub renamed_images: usize,
+    pub auto_val_split: Option<AutoValSplit>,
     pub failure_summary: FailureSummary,
 }
 
@@ -132,14 +143,80 @@ fn is_ndjson_size_allowed(size: u64) -> bool {
     size <= MAX_NDJSON_BYTES
 }
 
-fn short_stable_hash(input: &str) -> String {
-    // FNV-1a 64-bit hash, truncated for compact deterministic filenames.
+/// FNV-1a 64-bit hash: stable across runs and platforms.
+fn fnv1a_64(input: &str) -> u64 {
     let mut hash: u64 = 0xcbf29ce484222325;
     for byte in input.as_bytes() {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x100000001b3);
     }
-    format!("{:08x}", (hash & 0xffff_ffff) as u32)
+    hash
+}
+
+fn short_stable_hash(input: &str) -> String {
+    // Truncated for compact deterministic filenames.
+    format!("{:08x}", (fnv1a_64(input) & 0xffff_ffff) as u32)
+}
+
+/// Number of train images to move to val: `max(1, n / AUTO_VAL_SHARE)` when the converter
+/// writes a `data.yaml` and `data` has train images but none in val, else 0. Ultralytics
+/// training refuses a dataset YAML with no `val:` key.
+fn val_images_to_move(data: &NDJSONData, converter: &dyn Converter) -> Result<usize, String> {
+    if !converter.writes_data_yaml(&data.metadata.task) || !data.valid_images().is_empty() {
+        return Ok(0);
+    }
+    match data.train_images().len() {
+        // Datasets with no train split are exported as they are.
+        0 => Ok(0),
+        1 => Err("No val images and only 1 train image are left to export. \
+                  Ultralytics training needs a val split: add val images, \
+                  or at least 2 train images so one can be moved to val."
+            .to_string()),
+        n => Ok((n / AUTO_VAL_SHARE).max(1)),
+    }
+}
+
+/// Moves train images to val when `val_images_to_move` asks for it, re-keying their
+/// downloaded bytes. The moved images are the train images with the lowest FNV-1a hash
+/// of their output name (name breaks ties), so the same input moves the same images
+/// whatever the download order. Names stay unique: they were unique in train and val
+/// was empty. An error names the `omitted_images` that failed to download.
+fn move_train_images_to_val(
+    data: &mut NDJSONData,
+    converter: &dyn Converter,
+    downloaded_images: &mut HashMap<String, Vec<u8>>,
+    omitted_images: usize,
+) -> Result<Option<AutoValSplit>, String> {
+    let moved = val_images_to_move(data, converter).map_err(|message| match omitted_images {
+        0 => message,
+        1 => format!("{message} 1 image was skipped because it could not be downloaded."),
+        n => format!("{message} {n} images were skipped because they could not be downloaded."),
+    })?;
+    if moved == 0 {
+        return Ok(None);
+    }
+
+    let mut train: Vec<&mut ImageEntry> = data
+        .images
+        .iter_mut()
+        .filter(|image| image.split == "train")
+        .collect();
+    let train_images = train.len();
+    train.sort_by_cached_key(|image| {
+        let name = image.effective_file_name().to_string();
+        (fnv1a_64(&name), name)
+    });
+    for image in train.into_iter().take(moved) {
+        let train_key = parser::image_entry_download_key(image);
+        image.split = "val".to_string();
+        if let Some(bytes) = downloaded_images.remove(&train_key) {
+            downloaded_images.insert(parser::image_entry_download_key(image), bytes);
+        }
+    }
+    Ok(Some(AutoValSplit {
+        moved,
+        train_images,
+    }))
 }
 
 /// Appends `suffix` to the output stem, so every suffix yields a new `output_name_key`.
@@ -363,6 +440,7 @@ async fn convert_ndjson(
 
     let mut data = parse_ndjson(&content).map_err(|e| format!("Failed to parse NDJSON: {}", e))?;
     check_task_format(&data.metadata.task, &format)?;
+    let converter = get_converter(&format).ok_or_else(|| format!("Unknown format: {}", format))?;
     validate_pose_dataset(&mut data).map_err(|e| e.to_string())?;
     data.images = prepare_images_with_unique_output_names(&data.images);
     let original_image_count = data.images.len();
@@ -377,6 +455,7 @@ async fn convert_ndjson(
         .ok();
 
     validate_semantic_polygons(&data)?;
+    val_images_to_move(&data, converter.as_ref())?;
 
     // Download images if requested
     let download_result = if include_images {
@@ -404,7 +483,6 @@ async fn convert_ndjson(
         kept_image_count,
         &download_result.failure_summary,
     )?;
-    let converter = get_converter(&format).ok_or_else(|| format!("Unknown format: {}", format))?;
     resolve_image_sizes(
         &mut data,
         converter.as_ref(),
@@ -412,9 +490,16 @@ async fn convert_ndjson(
         include_images,
     )?;
     let DownloadResult {
-        files: downloaded_images,
+        files: mut downloaded_images,
         failure_summary,
     } = download_result;
+    // After download filtering, so the val split matches the images in the ZIP.
+    let auto_val_split = move_train_images_to_val(
+        &mut data,
+        converter.as_ref(),
+        &mut downloaded_images,
+        omitted_images,
+    )?;
 
     // Convert
     channel
@@ -504,6 +589,7 @@ async fn convert_ndjson(
         zip_path: output_path.to_string_lossy().to_string(),
         omitted_images,
         renamed_images,
+        auto_val_split,
         failure_summary,
     })
 }
@@ -524,9 +610,10 @@ pub fn run() {
 mod tests {
     use super::{
         file_name_with_suffix, filter_images_without_downloads, is_ndjson_size_allowed,
-        normalize_zip_path, prepare_images_with_unique_output_names, resolve_image_sizes,
-        short_stable_hash, validate_downloaded_image_count, validate_pose_dataset,
-        validate_semantic_polygons, ConvertErrorKind, MAX_NDJSON_BYTES,
+        move_train_images_to_val, normalize_zip_path, prepare_images_with_unique_output_names,
+        resolve_image_sizes, short_stable_hash, val_images_to_move,
+        validate_downloaded_image_count, validate_pose_dataset, validate_semantic_polygons,
+        ConvertErrorKind, MAX_NDJSON_BYTES,
     };
     use crate::converter::{get_class_list, get_converter};
     use crate::downloader::{FailureGroup, FailureKind, FailureSummary};
@@ -1188,6 +1275,245 @@ mod tests {
         );
         let voc = get_converter("pascal_voc").unwrap();
         assert!(resolve_image_sizes(&mut data, voc.as_ref(), &HashMap::new(), false).is_ok());
+    }
+
+    /// `task` dataset of `train` images `t0.jpg..`, then `val` images `v0.jpg..`, each with a URL.
+    fn split_data(task: &str, train: usize, val: usize) -> crate::parser::NDJSONData {
+        let annotations = if task == "classify" {
+            r#"{"classification":[0]}"#
+        } else {
+            r#"{"boxes":[[0,0.5,0.5,0.2,0.2]]}"#
+        };
+        let lines = (0..train)
+            .map(|i| ("train", format!("t{i}.jpg")))
+            .chain((0..val).map(|i| ("val", format!("v{i}.jpg"))))
+            .map(|(split, file)| {
+                format!(
+                    r#"{{"file":"{file}","width":64,"height":64,"split":"{split}","url":"https://cdn.example/{file}","annotations":{annotations}}}"#
+                )
+            });
+        let header = format!(
+            r#"{{"type":"dataset","task":"{task}","name":"split","class_names":{{"0":"cat"}}}}"#
+        );
+        parse_ndjson(
+            &std::iter::once(header)
+                .chain(lines)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap()
+    }
+
+    fn all_downloaded(data: &crate::parser::NDJSONData) -> HashMap<String, Vec<u8>> {
+        data.images
+            .iter()
+            .map(|image| {
+                (
+                    image_entry_download_key(image),
+                    image.file.clone().into_bytes(),
+                )
+            })
+            .collect()
+    }
+
+    fn paths_under(files: &HashMap<String, Vec<u8>>, prefix: &str) -> Vec<String> {
+        let mut paths: Vec<String> = files
+            .keys()
+            .filter(|path| path.starts_with(prefix))
+            .cloned()
+            .collect();
+        paths.sort();
+        paths
+    }
+
+    #[test]
+    fn yolo_export_without_val_moves_a_tenth_of_train_to_val() {
+        let mut data = split_data("detect", 10, 0);
+        let mut downloaded = all_downloaded(&data);
+        let converter = get_converter("yolo").unwrap();
+
+        let moved = move_train_images_to_val(&mut data, converter.as_ref(), &mut downloaded, 0)
+            .unwrap()
+            .unwrap();
+        let files = converter.convert(&data, &downloaded);
+
+        assert_eq!((moved.moved, moved.train_images), (1, 10));
+        assert_eq!(paths_under(&files, "train/images/").len(), 9);
+        assert_eq!(paths_under(&files, "train/labels/").len(), 9);
+        let val_images = paths_under(&files, "valid/images/");
+        assert_eq!(val_images.len(), 1);
+        let file = val_images[0].trim_start_matches("valid/images/");
+        assert_eq!(files[&val_images[0]], file.as_bytes());
+        assert_eq!(
+            files[&format!("valid/labels/{}.txt", file.trim_end_matches(".jpg"))],
+            b"0 0.500000 0.500000 0.200000 0.200000"
+        );
+        let yaml = std::str::from_utf8(&files["data.yaml"]).unwrap();
+        assert!(
+            yaml.contains("train: train/images\nval: valid/images\nnc: 1\n"),
+            "{yaml}"
+        );
+        assert!(!yaml.contains("# WARNING:"), "{yaml}");
+    }
+
+    fn val_files(data: &crate::parser::NDJSONData) -> Vec<String> {
+        let mut files: Vec<String> = data
+            .valid_images()
+            .iter()
+            .map(|image| image.file.clone())
+            .collect();
+        files.sort();
+        files
+    }
+
+    #[test]
+    fn auto_val_split_moves_floor_of_a_tenth() {
+        let mut data = split_data("segment", 25, 0);
+        let converter = get_converter("yolo").unwrap();
+
+        let moved = move_train_images_to_val(&mut data, converter.as_ref(), &mut HashMap::new(), 0)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!((moved.moved, moved.train_images), (2, 25));
+        assert_eq!((data.train_images().len(), val_files(&data).len()), (23, 2));
+    }
+
+    #[test]
+    fn auto_val_split_picks_the_same_images_on_every_run() {
+        let converter = get_converter("yolo").unwrap();
+        let picks = |reverse: bool| {
+            let mut data = split_data("detect", 25, 0);
+            if reverse {
+                data.images.reverse();
+            }
+            move_train_images_to_val(&mut data, converter.as_ref(), &mut HashMap::new(), 0)
+                .unwrap();
+            val_files(&data)
+        };
+
+        let first = picks(false);
+        assert_eq!(first, picks(false));
+        // With unique names, as here, reordering the lines changes nothing either.
+        assert_eq!(first, picks(true));
+        // Lowest FNV-1a 64 of t0.jpg..t24.jpg, computed independently.
+        assert_eq!(first, ["t1.jpg", "t20.jpg"]);
+    }
+
+    #[test]
+    fn single_train_image_without_val_fails_before_download() {
+        let mut data = split_data("detect", 1, 0);
+        let converter = get_converter("yolo").unwrap();
+        let expected = "No val images and only 1 train image are left to export. \
+                        Ultralytics training needs a val split: add val images, \
+                        or at least 2 train images so one can be moved to val.";
+
+        assert_eq!(
+            val_images_to_move(&data, converter.as_ref()).unwrap_err(),
+            expected
+        );
+        assert_eq!(
+            move_train_images_to_val(&mut data, converter.as_ref(), &mut HashMap::new(), 0)
+                .unwrap_err(),
+            expected
+        );
+    }
+
+    #[test]
+    fn single_train_image_left_after_failed_downloads_names_the_skipped_count() {
+        for (train, val, omitted_text) in [
+            (
+                2,
+                0,
+                "1 image was skipped because it could not be downloaded.",
+            ),
+            (
+                2,
+                2,
+                "3 images were skipped because they could not be downloaded.",
+            ),
+        ] {
+            let mut data = split_data("detect", train, val);
+            let converter = get_converter("yolo").unwrap();
+            // Passes before download; the problem only appears once downloads fail.
+            assert!(val_images_to_move(&data, converter.as_ref()).is_ok());
+            let mut downloaded = all_downloaded(&data);
+            downloaded.retain(|key, _| key.ends_with(":t0.jpg"));
+            let omitted = filter_images_without_downloads(&mut data, &downloaded, true);
+
+            let error =
+                move_train_images_to_val(&mut data, converter.as_ref(), &mut downloaded, omitted)
+                    .unwrap_err();
+
+            assert_eq!(
+                error,
+                format!(
+                    "No val images and only 1 train image are left to export. \
+                     Ultralytics training needs a val split: add val images, \
+                     or at least 2 train images so one can be moved to val. {omitted_text}"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn dataset_with_val_images_is_not_split() {
+        let mut data = split_data("detect", 10, 1);
+        let converter = get_converter("yolo").unwrap();
+
+        let moved = move_train_images_to_val(&mut data, converter.as_ref(), &mut HashMap::new(), 0)
+            .unwrap();
+
+        assert_eq!(moved, None);
+        assert_eq!(val_files(&data), ["v0.jpg"]);
+        assert_eq!(data.train_images().len(), 10);
+    }
+
+    #[test]
+    fn val_split_whose_downloads_all_failed_is_replaced_from_train() {
+        let mut data = split_data("detect", 10, 2);
+        let mut downloaded = all_downloaded(&data);
+        downloaded.retain(|key, _| !key.contains(":valid:"));
+        filter_images_without_downloads(&mut data, &downloaded, true);
+        let converter = get_converter("yolo").unwrap();
+
+        let moved = move_train_images_to_val(&mut data, converter.as_ref(), &mut downloaded, 0)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!((moved.moved, moved.train_images), (1, 10));
+        assert_eq!(val_files(&data).len(), 1);
+    }
+
+    #[test]
+    fn other_formats_and_classify_are_never_split() {
+        for (task, format) in [
+            ("detect", "yolo_darknet"),
+            ("detect", "coco"),
+            ("detect", "pascal_voc"),
+            ("classify", "yolo"),
+            ("classify", "yolo_darknet"),
+            ("classify", "pascal_voc"),
+        ] {
+            let converter = get_converter(format).unwrap();
+            let mut data = split_data(task, 10, 0);
+            let mut downloaded = all_downloaded(&data);
+            let before = all_downloaded(&data);
+
+            let moved = move_train_images_to_val(&mut data, converter.as_ref(), &mut downloaded, 0)
+                .unwrap();
+            assert_eq!(moved, None, "{task} + {format}");
+            assert!(val_files(&data).is_empty(), "{task} + {format}");
+            assert_eq!(downloaded, before, "{task} + {format}");
+
+            let mut single = split_data(task, 1, 0);
+            assert_eq!(val_images_to_move(&single, converter.as_ref()), Ok(0));
+            assert_eq!(
+                move_train_images_to_val(&mut single, converter.as_ref(), &mut HashMap::new(), 0),
+                Ok(None),
+                "{task} + {format}"
+            );
+        }
     }
 
     #[test]
