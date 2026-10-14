@@ -7,6 +7,8 @@ import { Progress } from "@/components/ui/progress";
 import { formats } from "@/lib/types";
 import {
   buildDownloadFailureMessage,
+  safeExample,
+  withExamples,
   type DownloadFailureMessage,
 } from "@/lib/download-failures";
 import { useConverter } from "@/hooks/use-converter";
@@ -350,9 +352,16 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
                         data-testid="renamed-images"
                         className="mt-3 text-left text-xs text-muted-foreground"
                       >
-                        {result.renamed_images === 1
-                          ? "Renamed 1 image whose file name clashed within a split."
-                          : `Renamed ${result.renamed_images} images whose file names clashed within a split.`}
+                        {withExamples(
+                          result.renamed_images === 1
+                            ? "Renamed 1 image whose file name clashed within a split"
+                            : `Renamed ${result.renamed_images} images whose file names clashed within a split`,
+                          result.renamed_images,
+                          result.renamed_examples.map(
+                            (image) => `${image.split}/${safeExample(image.file)} → ${safeExample(image.output_file)}`,
+                          ),
+                        )}
+                        .
                       </p>
                     )}
                     {result.unlabeled_images > 0 && (

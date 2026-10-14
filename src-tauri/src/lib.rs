@@ -17,6 +17,8 @@ const MAX_NDJSON_BYTES: u64 = 100 * 1024 * 1024; // 100 MiB
 const MAX_DOWNLOAD_CONCURRENCY: usize = 20;
 /// One in this many train images moves to val when an export has none, as in Ultralytics.
 const AUTO_VAL_SHARE: usize = 10;
+/// Renamed images named in the success report; the rest are only counted.
+const RENAMED_IMAGE_EXAMPLES: usize = 3;
 
 /// Train images moved to val because no val images were left to export.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -26,11 +28,21 @@ pub struct AutoValSplit {
     pub train_images: usize,
 }
 
+/// An image written under a new name because its own clashed within its split.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct RenamedImage {
+    pub split: String,
+    pub file: String,
+    pub output_file: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ConvertResult {
     pub zip_path: String,
     pub omitted_images: usize,
     pub renamed_images: usize,
+    /// The first few renamed images, in input order.
+    pub renamed_examples: Vec<RenamedImage>,
     /// Classify images skipped because they have no class ID.
     pub unlabeled_images: usize,
     pub auto_val_split: Option<AutoValSplit>,
@@ -424,6 +436,23 @@ fn prepare_export_images(data: &mut NDJSONData, converter: &dyn Converter) -> us
     unlabeled_images
 }
 
+/// Counts the images with a new output name and returns the first few as examples.
+fn renamed_image_report(images: &[ImageEntry]) -> (usize, Vec<RenamedImage>) {
+    let mut renamed = images
+        .iter()
+        .filter_map(|image| Some((image, image.output_file.as_deref()?)));
+    let examples: Vec<RenamedImage> = renamed
+        .by_ref()
+        .take(RENAMED_IMAGE_EXAMPLES)
+        .map(|(image, output_file)| RenamedImage {
+            split: normalize_split(&image.split).to_string(),
+            file: image.file.clone(),
+            output_file: output_file.to_string(),
+        })
+        .collect();
+    (examples.len() + renamed.count(), examples)
+}
+
 /// Files downloaded for one image: the image, then its depth map when `pairs_depth_maps`.
 fn image_downloads(image: &ImageEntry, pairs_depth_maps: bool) -> Vec<DownloadRequest> {
     let mut downloads = vec![DownloadRequest::image(image)];
@@ -561,11 +590,6 @@ async fn convert_ndjson(
         include_images,
     );
     let kept_image_count = data.images.len();
-    let renamed_images = data
-        .images
-        .iter()
-        .filter(|image| image.output_file.is_some())
-        .count();
     validate_downloaded_image_count(
         include_images,
         original_image_count,
@@ -589,6 +613,8 @@ async fn convert_ndjson(
         &mut downloaded_images,
         omitted_images,
     )?;
+    // After the val move, so each example names the split its file is written to.
+    let (renamed_images, renamed_examples) = renamed_image_report(&data.images);
 
     // Convert
     channel
@@ -678,6 +704,7 @@ async fn convert_ndjson(
         zip_path: output_path.to_string_lossy().to_string(),
         omitted_images,
         renamed_images,
+        renamed_examples,
         unlabeled_images,
         auto_val_split,
         failure_summary,
@@ -701,10 +728,10 @@ mod tests {
     use super::{
         download_requests, file_name_with_suffix, filter_images_without_downloads,
         is_ndjson_size_allowed, move_train_images_to_val, normalize_zip_path,
-        prepare_export_images, prepare_images_with_unique_output_names, resolve_image_sizes,
-        short_stable_hash, val_images_to_move, validate_depth_dataset,
+        prepare_export_images, prepare_images_with_unique_output_names, renamed_image_report,
+        resolve_image_sizes, short_stable_hash, val_images_to_move, validate_depth_dataset,
         validate_downloaded_image_count, validate_pose_dataset, validate_semantic_polygons,
-        ConvertErrorKind, MAX_NDJSON_BYTES,
+        ConvertErrorKind, RenamedImage, MAX_NDJSON_BYTES,
     };
     use crate::converter::{get_class_list, get_converter};
     use crate::downloader::{DownloadRequest, FailureGroup, FailureKind, FailureSummary};
@@ -1727,6 +1754,78 @@ mod tests {
             // `renamed_images` counts the images with an `output_file`.
             assert_eq!(data.images[0].output_file, None);
         }
+    }
+
+    #[test]
+    fn renamed_image_is_reported_with_its_split_and_both_names() {
+        let mut data = parse_ndjson(
+            r#"{"type":"dataset","task":"detect","name":"pets"}
+{"file":"a.jpg","split":"train","url":"https://cdn.example/a.jpg"}
+{"file":"a.png","split":"train","url":"https://cdn.example/a.png"}"#,
+        )
+        .unwrap();
+        prepare_export_images(&mut data, get_converter("yolo").unwrap().as_ref());
+
+        assert_eq!(
+            renamed_image_report(&data.images),
+            (
+                1,
+                vec![RenamedImage {
+                    split: "train".to_string(),
+                    file: "a.png".to_string(),
+                    output_file: "a__261bb218.png".to_string(),
+                }]
+            )
+        );
+    }
+
+    #[test]
+    fn five_renamed_images_are_counted_with_the_first_three_as_examples() {
+        let mut data = parse_ndjson(
+            r#"{"type":"dataset","task":"detect","name":"pets"}
+{"file":"a.jpg","split":"train","url":"https://cdn.example/a.jpg"}
+{"file":"a.png","split":"train","url":"https://cdn.example/a.png"}
+{"file":"b.jpg","split":"val","url":"https://cdn.example/b.jpg"}
+{"file":"B.png","split":"valid","url":"https://cdn.example/B.png"}
+{"file":"a.gif","split":"train","url":"https://cdn.example/a.gif"}
+{"file":"b.gif","split":"val","url":"https://cdn.example/b.gif"}
+{"file":"a.bmp","split":"train","url":"https://cdn.example/a.bmp"}"#,
+        )
+        .unwrap();
+        prepare_export_images(&mut data, get_converter("yolo").unwrap().as_ref());
+
+        let (count, examples) = renamed_image_report(&data.images);
+
+        assert_eq!(count, 5);
+        let examples: Vec<(&str, &str)> = examples
+            .iter()
+            .map(|image| (image.split.as_str(), image.file.as_str()))
+            .collect();
+        assert_eq!(
+            examples,
+            [("train", "a.png"), ("valid", "B.png"), ("train", "a.gif")]
+        );
+    }
+
+    #[test]
+    fn omitted_and_unlabeled_images_are_not_reported_as_renamed() {
+        let mut data = pets(&[
+            r#"{"file":"a.jpg","split":"train","url":"https://cdn.example/a.jpg","annotations":{"classification":[0]}}"#,
+            r#"{"file":"a.png","split":"train","url":"https://cdn.example/a.png"}"#,
+            r#"{"file":"a.bmp","split":"train","url":"https://cdn.example/a.bmp","annotations":{"classification":[0]}}"#,
+            r#"{"file":"a.gif","split":"train","url":"https://cdn.example/a.gif","annotations":{"classification":[0]}}"#,
+        ]);
+        let converter = get_converter("yolo").unwrap();
+        prepare_export_images(&mut data, converter.as_ref());
+        let mut downloaded = all_downloaded(&data);
+        downloaded.retain(|key, _| !key.ends_with(".bmp"));
+        filter_images_without_downloads(&mut data, converter.as_ref(), &downloaded, true);
+
+        let (count, examples) = renamed_image_report(&data.images);
+
+        assert_eq!(count, 1);
+        assert_eq!(examples.len(), 1);
+        assert_eq!(examples[0].file, "a.gif");
     }
 
     #[test]
