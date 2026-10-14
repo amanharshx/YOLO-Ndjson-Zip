@@ -161,7 +161,7 @@ describe("DownloadFailureDetails", () => {
       getDownloadRate: vi.fn(),
     });
 
-    render(<ConverterScreen onBack={vi.fn()} />);
+    render(<ConverterScreen onBack={vi.fn()} onOpenAbout={vi.fn()} updateAvailable={false} />);
 
     expect(screen.getByTestId("error-message")).toHaveTextContent(
       "Your download links expired on 19 Jul 2026.",
@@ -206,7 +206,7 @@ describe("ConverterScreen success card", () => {
       getDownloadRate: vi.fn(),
     });
 
-    render(<ConverterScreen onBack={vi.fn()} />);
+    render(<ConverterScreen onBack={vi.fn()} onOpenAbout={vi.fn()} updateAvailable={false} />);
   }
 
   it("reports images renamed to avoid file name clashes", () => {
@@ -318,7 +318,7 @@ describe("ConverterScreen download progress", () => {
       getDownloadRate: vi.fn(() => "2.0"),
     });
 
-    render(<ConverterScreen onBack={vi.fn()} />);
+    render(<ConverterScreen onBack={vi.fn()} onOpenAbout={vi.fn()} updateAvailable={false} />);
 
     expect(screen.getByText("Downloading Files")).toBeInTheDocument();
     expect(screen.getByText("3 / 4")).toBeInTheDocument();

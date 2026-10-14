@@ -1,14 +1,14 @@
 import { Button } from "@/components/ui/button";
 import { formatBadges } from "@/lib/types";
 import { Zap, Layers, Lock, ArrowRight } from "lucide-react";
-import { UpdateChecker } from "./update-checker";
+import { AboutButton, type AboutProps } from "./about-dialog";
 import appIcon from "../../assets/icon2.png";
 
-export function WelcomeScreen({ onGetStarted }: { onGetStarted: () => void }) {
+export function WelcomeScreen({ onGetStarted, ...about }: { onGetStarted: () => void } & AboutProps) {
   return (
     <div data-testid="welcome-screen" className="relative flex min-h-screen">
       <div className="absolute top-4 right-4">
-        <UpdateChecker />
+        <AboutButton {...about} />
       </div>
       {/* Left Side - Branding */}
       <div className="flex flex-1 flex-col items-center justify-center bg-primary/5 px-12 py-8">
