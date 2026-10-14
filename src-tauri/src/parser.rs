@@ -4,8 +4,6 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum ParseError {
-    #[error("Failed to parse JSON: {0}")]
-    JsonError(#[from] serde_json::Error),
     #[error("No metadata found in NDJSON")]
     NoMetadata,
     #[error("IO error: {0}")]
@@ -14,6 +12,8 @@ pub enum ParseError {
     InvalidPose(String),
     #[error("Invalid split: {0}")]
     InvalidSplit(String),
+    #[error("Invalid record on line {line}: {message}")]
+    InvalidRecord { line: usize, message: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,8 +56,6 @@ pub struct ObbAnnotation {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatasetMetadata {
-    #[serde(default)]
-    pub r#type: String,
     #[serde(default = "default_task")]
     pub task: String,
     #[serde(default)]
@@ -108,8 +106,6 @@ where
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageEntry {
-    #[serde(default)]
-    pub r#type: String,
     pub file: String,
     #[serde(skip)]
     pub output_file: Option<String>,
@@ -531,35 +527,61 @@ impl NDJSONData {
     }
 }
 
+/// Like Ultralytics, the first non-empty line is the dataset record and every later
+/// non-empty line is an image record, whatever its `type`.
 pub fn parse_ndjson(content: &str) -> Result<NDJSONData, ParseError> {
-    let mut metadata: Option<DatasetMetadata> = None;
-    let mut images: Vec<ImageEntry> = Vec::new();
+    // Line numbers count blank lines so they match what an editor shows.
+    let mut records = content
+        .lines()
+        .enumerate()
+        .map(|(index, text)| (index + 1, text.trim()))
+        .filter(|(_, text)| !text.is_empty());
 
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        let value: serde_json::Value = serde_json::from_str(line)?;
-
-        if let Some(type_str) = value.get("type").and_then(|v| v.as_str()) {
-            match type_str {
-                "dataset" => {
-                    metadata = Some(serde_json::from_value(value)?);
-                }
-                "image" => {
-                    images.push(serde_json::from_value(value)?);
-                }
-                _ => {}
-            }
+    let (line, text) = records.next().ok_or(ParseError::NoMetadata)?;
+    let value: serde_json::Value = serde_json::from_str(text).map_err(record_error(line))?;
+    match value.get("type") {
+        None | Some(serde_json::Value::Null) => {}
+        Some(found) if *found == "dataset" => {}
+        Some(found) => {
+            return Err(ParseError::InvalidRecord {
+                line,
+                message: format!(
+                    "the first line must be the dataset record, found type {}",
+                    found
+                ),
+            });
         }
     }
+    let metadata: DatasetMetadata = serde_json::from_value(value).map_err(record_error(line))?;
 
-    let metadata = metadata.ok_or(ParseError::NoMetadata)?;
+    let mut images: Vec<ImageEntry> = Vec::new();
+    for (line, text) in records {
+        let value: serde_json::Value = serde_json::from_str(text).map_err(record_error(line))?;
+        if value.get("type").and_then(serde_json::Value::as_str) == Some("dataset") {
+            return Err(ParseError::InvalidRecord {
+                line,
+                message: "only the first line may be the dataset record".to_string(),
+            });
+        }
+        images.push(serde_json::from_value(value).map_err(record_error(line))?);
+    }
+
     validate_splits(&images)?;
 
     Ok(NDJSONData { metadata, images })
+}
+
+/// serde positions are relative to the one-line record, so only the column is kept.
+fn record_error(line: usize) -> impl FnOnce(serde_json::Error) -> ParseError {
+    move |error| {
+        let message = error.to_string();
+        let position = format!(" at line {} column {}", error.line(), error.column());
+        let message = match message.strip_suffix(&position) {
+            Some(reason) => format!("{} at column {}", reason, error.column()),
+            None => message,
+        };
+        ParseError::InvalidRecord { line, message }
+    }
 }
 
 /// Rejects missing or unknown splits before download, so no image is fetched and then
@@ -610,7 +632,6 @@ mod tests {
                 ];
                 row.extend(payload.into_iter().map(|value| serde_json::json!(value)));
                 ImageEntry {
-                    r#type: "image".to_string(),
                     file: format!("pose_{index}.jpg"),
                     output_file: None,
                     url: String::new(),
@@ -624,7 +645,6 @@ mod tests {
 
         NDJSONData {
             metadata: DatasetMetadata {
-                r#type: "dataset".to_string(),
                 task: "pose".to_string(),
                 name: "pose-test".to_string(),
                 description: String::new(),
@@ -790,6 +810,68 @@ mod tests {
     }
 
     #[test]
+    fn image_lines_are_images_whatever_their_type_value() {
+        let content = r#"{"type":"dataset","name":"test","class_names":{}}
+{"type":null,"file":"a.jpg","width":1,"height":1,"split":"train"}
+{"type":5,"file":"b.jpg","width":1,"height":1,"split":"train"}
+{"type":"video","file":"c.jpg","width":1,"height":1,"split":"train"}"#;
+
+        let data = parse_ndjson(content).unwrap();
+
+        let files: Vec<&str> = data.images.iter().map(|img| img.file.as_str()).collect();
+        assert_eq!(files, ["a.jpg", "b.jpg", "c.jpg"]);
+    }
+
+    #[test]
+    fn first_line_with_null_type_is_the_dataset_record() {
+        let content = r#"{"type":null,"name":"test","class_names":{}}
+{"file":"a.jpg","width":1,"height":1,"split":"train"}"#;
+
+        let data = parse_ndjson(content).unwrap();
+
+        assert_eq!(data.metadata.name, "test");
+        assert_eq!(data.images.len(), 1);
+    }
+
+    #[test]
+    fn first_line_with_non_string_type_is_rejected() {
+        let error = parse_ndjson(r#"{"type":5,"name":"test","class_names":{}}"#)
+            .unwrap_err()
+            .to_string();
+
+        assert_eq!(
+            error,
+            "Invalid record on line 1: the first line must be the dataset record, found type 5"
+        );
+    }
+
+    #[test]
+    fn repeated_dataset_line_is_rejected_naming_its_line() {
+        let content = r#"{"type":"dataset","name":"first","class_names":{}}
+{"file":"a.jpg","width":1,"height":1,"split":"train"}
+
+{"type":"dataset","name":"second","class_names":{}}"#;
+
+        let error = parse_ndjson(content).unwrap_err().to_string();
+
+        assert_eq!(
+            error,
+            "Invalid record on line 4: only the first line may be the dataset record"
+        );
+    }
+
+    #[test]
+    fn image_line_without_file_is_rejected_naming_its_line() {
+        let content = r#"{"type":"dataset","name":"test","class_names":{}}
+{"file":"a.jpg","width":1,"height":1,"split":"train"}
+{"type":"image","width":1,"height":1,"split":"train"}"#;
+
+        let error = parse_ndjson(content).unwrap_err().to_string();
+
+        assert_eq!(error, "Invalid record on line 3: missing field `file`");
+    }
+
+    #[test]
     fn parse_string_version() {
         let content = r#"{"type":"dataset","name":"test","class_names":{},"version":"latest"}"#;
         let result = parse_ndjson(content).unwrap();
@@ -811,29 +893,44 @@ mod tests {
     }
 
     #[test]
-    fn parse_malformed_json_returns_error() {
-        let content = r#"{"type":"dataset","name":"test"
-{invalid json}"#;
+    fn malformed_json_is_rejected_naming_its_line_and_column() {
+        let content = r#"{"type":"dataset","name":"test","class_names":{}}
 
-        let result = parse_ndjson(content);
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ParseError::JsonError(_)));
+{"file":"a.jpg","width":1,"height":1,"split":"train"} trailing"#;
+
+        let error = parse_ndjson(content).unwrap_err().to_string();
+
+        assert_eq!(
+            error,
+            "Invalid record on line 3: trailing characters at column 55"
+        );
     }
 
     #[test]
-    fn parse_missing_metadata_returns_error() {
-        let content =
-            r#"{"type":"image","file":"img1.jpg","width":640,"height":480,"split":"train"}"#;
+    fn parse_empty_content_returns_no_metadata() {
+        assert!(matches!(
+            parse_ndjson("\n  \n").unwrap_err(),
+            ParseError::NoMetadata
+        ));
+    }
 
-        let result = parse_ndjson(content);
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ParseError::NoMetadata));
+    #[test]
+    fn first_line_typed_as_image_is_rejected() {
+        let content = r#"
+{"type":"image","file":"img1.jpg","width":640,"height":480,"split":"train"}"#;
+
+        let error = parse_ndjson(content).unwrap_err().to_string();
+
+        assert_eq!(
+            error,
+            "Invalid record on line 2: the first line must be the dataset record, \
+             found type \"image\""
+        );
     }
 
     #[test]
     fn get_bboxes_extracts_correctly() {
         let entry = ImageEntry {
-            r#type: "image".to_string(),
             file: "test.jpg".to_string(),
             output_file: None,
             url: String::new(),
@@ -856,7 +953,6 @@ mod tests {
     #[test]
     fn get_bboxes_extracts_from_boxes_alias() {
         let entry = ImageEntry {
-            r#type: "image".to_string(),
             file: "test.jpg".to_string(),
             output_file: None,
             url: String::new(),
@@ -879,7 +975,6 @@ mod tests {
     fn get_pose_annotations_parses_new_format() {
         // Format: [class_id, bbox_cx, bbox_cy, bbox_w, bbox_h, kp1_x, kp1_y, kp1_v, ...]
         let entry = ImageEntry {
-            r#type: "image".to_string(),
             file: "test.jpg".to_string(),
             output_file: None,
             url: String::new(),
@@ -909,7 +1004,6 @@ mod tests {
     #[test]
     fn get_pose_annotations_parses_two_dimensional_keypoints() {
         let entry = ImageEntry {
-            r#type: "image".to_string(),
             file: "test.jpg".to_string(),
             output_file: None,
             url: String::new(),
@@ -931,7 +1025,6 @@ mod tests {
     #[test]
     fn image_entry_download_key_uses_effective_file_name() {
         let entry = ImageEntry {
-            r#type: "image".to_string(),
             file: "img1.jpg".to_string(),
             output_file: Some("img1__abcd1234.jpg".to_string()),
             url: String::new(),
@@ -1077,7 +1170,6 @@ mod tests {
     #[test]
     fn get_obb_annotations_parses_correctly() {
         let entry = ImageEntry {
-            r#type: "image".to_string(),
             file: "test.jpg".to_string(),
             output_file: None,
             url: String::new(),
@@ -1101,7 +1193,6 @@ mod tests {
     #[test]
     fn get_obb_annotations_rejects_wrong_length() {
         let entry = ImageEntry {
-            r#type: "image".to_string(),
             file: "test.jpg".to_string(),
             output_file: None,
             url: String::new(),

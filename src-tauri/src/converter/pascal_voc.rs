@@ -272,7 +272,6 @@ mod tests {
     fn convert_uses_split_aware_download_keys() {
         let data = NDJSONData {
             metadata: DatasetMetadata {
-                r#type: "dataset".to_string(),
                 task: "detect".to_string(),
                 name: "test".to_string(),
                 description: String::new(),
@@ -284,7 +283,6 @@ mod tests {
             },
             images: vec![
                 ImageEntry {
-                    r#type: "image".to_string(),
                     file: "img1.jpg".to_string(),
                     output_file: None,
                     url: String::new(),
@@ -296,7 +294,6 @@ mod tests {
                     })),
                 },
                 ImageEntry {
-                    r#type: "image".to_string(),
                     file: "img1.jpg".to_string(),
                     output_file: None,
                     url: String::new(),
@@ -325,7 +322,6 @@ mod tests {
     fn object_names_use_placeholder_for_unnamed_class_ids() {
         let data = NDJSONData {
             metadata: DatasetMetadata {
-                r#type: "dataset".to_string(),
                 task: "detect".to_string(),
                 name: "test".to_string(),
                 description: String::new(),
@@ -336,7 +332,6 @@ mod tests {
                 version: "1".to_string(),
             },
             images: vec![ImageEntry {
-                r#type: "image".to_string(),
                 file: "a.jpg".to_string(),
                 output_file: None,
                 url: String::new(),
@@ -381,7 +376,6 @@ mod tests {
     fn convert_uses_effective_file_names_for_duplicate_outputs() {
         let data = NDJSONData {
             metadata: DatasetMetadata {
-                r#type: "dataset".to_string(),
                 task: "detect".to_string(),
                 name: "test".to_string(),
                 description: String::new(),
@@ -393,7 +387,6 @@ mod tests {
             },
             images: vec![
                 ImageEntry {
-                    r#type: "image".to_string(),
                     file: "Frame_98.jpg".to_string(),
                     output_file: None,
                     url: "https://cdn.example/a.jpg".to_string(),
@@ -405,7 +398,6 @@ mod tests {
                     })),
                 },
                 ImageEntry {
-                    r#type: "image".to_string(),
                     file: "Frame_98.jpg".to_string(),
                     output_file: Some("Frame_98__abcd1234.jpg".to_string()),
                     url: "https://cdn.example/b.jpg".to_string(),

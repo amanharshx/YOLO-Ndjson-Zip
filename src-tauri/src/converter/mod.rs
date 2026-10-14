@@ -138,7 +138,6 @@ mod tests {
     fn make_metadata_with_classes(class_names: HashMap<String, String>) -> NDJSONData {
         NDJSONData {
             metadata: DatasetMetadata {
-                r#type: "dataset".to_string(),
                 task: "detect".to_string(),
                 name: "test".to_string(),
                 description: String::new(),
@@ -295,7 +294,6 @@ mod tests {
         for annotations in rows {
             let mut data = make_metadata_with_classes(HashMap::new());
             data.images.push(ImageEntry {
-                r#type: "image".to_string(),
                 file: "a.jpg".to_string(),
                 output_file: None,
                 url: String::new(),
