@@ -1,4 +1,4 @@
-use super::{class_name, get_class_list, get_class_names, Converter};
+use super::{classify_folder_names, get_class_list, Converter};
 use crate::parser::{image_download_key, output_stem, ImageEntry, NDJSONData};
 use std::collections::HashMap;
 
@@ -27,24 +27,6 @@ impl SplitPresence {
 
 fn quote_yaml_scalar(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
-}
-
-fn sanitize_path_segment(segment: &str) -> String {
-    let sanitized = segment
-        .chars()
-        .map(|c| match c {
-            '/' | '\\' | '\0' => '_',
-            _ => c,
-        })
-        .collect::<String>()
-        .trim()
-        .to_string();
-
-    if sanitized.is_empty() {
-        "unlabeled".to_string()
-    } else {
-        sanitized
-    }
 }
 
 impl YoloConverter {
@@ -166,6 +148,10 @@ impl YoloConverter {
 }
 
 impl Converter for YoloConverter {
+    fn skips_unlabeled_images(&self, task: &str) -> bool {
+        task == "classify"
+    }
+
     fn writes_data_yaml(&self, task: &str) -> bool {
         // Darknet has no YAML, and classify datasets are read from their folders.
         !self.darknet && task != "classify"
@@ -179,6 +165,7 @@ impl Converter for YoloConverter {
         let mut files: HashMap<String, Vec<u8>> = HashMap::new();
         let task = &data.metadata.task;
         let class_list = get_class_list(data);
+        let class_folders = classify_folder_names(data);
 
         if self.darknet {
             // Darknet mode: _darknet.labels instead of data.yaml/classes.txt
@@ -228,11 +215,10 @@ impl Converter for YoloConverter {
                     "classify" => {
                         // For classification, we use folder structure
                         let classifications = img.get_classifications();
-                        if let Some(&class_id) = classifications.first() {
-                            let class_names = get_class_names(data);
-                            let class_dir =
-                                sanitize_path_segment(&class_name(&class_names, class_id));
-
+                        if let Some(class_dir) = classifications
+                            .first()
+                            .and_then(|class_id| class_folders.get(class_id))
+                        {
                             if let Some(image_data) =
                                 downloaded_images.get(&image_download_key(split, image_file))
                             {
@@ -473,28 +459,28 @@ mod tests {
     }
 
     #[test]
-    fn classify_paths_sanitize_class_name_segments() {
-        let mut class_names = HashMap::new();
-        class_names.insert("0".to_string(), "dogs/cats".to_string());
-        let image = ImageEntry {
-            file: "img1.jpg".to_string(),
-            output_file: None,
-            url: String::new(),
-            width: Some(640),
-            height: Some(480),
-            split: "train".to_string(),
-            annotations: Some(json!({
-                "classification": [0]
-            })),
-        };
-        let data = make_data("classify", class_names, None, vec![image]);
-        let converter = YoloConverter::new();
-        let mut downloaded_images = HashMap::new();
-        downloaded_images.insert(image_download_key("train", "img1.jpg"), vec![1, 2, 3]);
+    fn classify_class_lists_keep_original_names() {
+        let data = make_data(
+            "classify",
+            HashMap::from([
+                ("0".to_string(), "dogs/cats".to_string()),
+                ("1".to_string(), "Con".to_string()),
+            ]),
+            None,
+            vec![ImageEntry {
+                annotations: Some(json!({ "classification": [1] })),
+                ..image_with_split("train")
+            }],
+        );
+        let downloaded_images =
+            HashMap::from([(image_download_key("train", "train.jpg"), vec![1])]);
 
-        let files = converter.convert(&data, &downloaded_images);
+        let files = YoloConverter::new().convert(&data, &downloaded_images);
+        let darknet = YoloConverter::new_darknet().convert(&data, &downloaded_images);
 
-        assert!(files.contains_key("train/dogs_cats/img1.jpg"));
+        assert!(files.contains_key("train/Con_1/train.jpg"));
+        assert_eq!(files["classes.txt"], b"dogs/cats\nCon");
+        assert_eq!(darknet["_darknet.labels"], b"dogs/cats\nCon");
     }
 
     #[test]

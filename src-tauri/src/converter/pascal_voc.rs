@@ -1,4 +1,4 @@
-use super::{class_name, get_class_names, image_size, Converter};
+use super::{class_name, classify_folder_names, get_class_names, image_size, Converter};
 use crate::parser::{image_download_key, output_stem, ImageEntry, NDJSONData};
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
@@ -198,6 +198,10 @@ impl PascalVocConverter {
 }
 
 impl Converter for PascalVocConverter {
+    fn skips_unlabeled_images(&self, task: &str) -> bool {
+        task == "classify"
+    }
+
     fn needs_image_sizes(&self, task: &str) -> bool {
         task != "classify"
     }
@@ -210,6 +214,7 @@ impl Converter for PascalVocConverter {
         let mut files: HashMap<String, Vec<u8>> = HashMap::new();
         let class_names = get_class_names(data);
         let task = &data.metadata.task;
+        let class_folders = classify_folder_names(data);
 
         let splits = [
             ("train", data.train_images()),
@@ -223,21 +228,19 @@ impl Converter for PascalVocConverter {
             }
 
             if task == "classify" {
-                // Classification: folder structure {split}/{class_name}/{file}
+                // Classification: folder structure {split}/{class_folder}/{file}
                 for img in images.iter() {
                     let image_file = img.effective_file_name();
                     let classifications = img.get_classifications();
-                    if let Some(&class_id) = classifications.first() {
+                    if let Some(class_dir) = classifications
+                        .first()
+                        .and_then(|class_id| class_folders.get(class_id))
+                    {
                         if let Some(image_data) =
                             downloaded_images.get(&image_download_key(split, image_file))
                         {
                             files.insert(
-                                format!(
-                                    "{}/{}/{}",
-                                    split,
-                                    class_name(&class_names, class_id),
-                                    image_file
-                                ),
+                                format!("{}/{}/{}", split, class_dir, image_file),
                                 image_data.clone(),
                             );
                         }

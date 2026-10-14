@@ -4,7 +4,7 @@ pub mod pascal_voc;
 pub mod yolo;
 
 use crate::parser::{ImageEntry, NDJSONData};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 pub trait Converter {
     /// Whether `convert` writes pixel coordinates for `task`, so every image needs a size.
@@ -14,6 +14,12 @@ pub trait Converter {
 
     /// Whether `convert` writes a `data.yaml` for `task`.
     fn writes_data_yaml(&self, _task: &str) -> bool {
+        false
+    }
+
+    /// Whether `convert` leaves out images with no class ID for `task`, so they are
+    /// dropped before download and reported.
+    fn skips_unlabeled_images(&self, _task: &str) -> bool {
         false
     }
 
@@ -117,7 +123,61 @@ pub fn class_name(class_names: &HashMap<i32, String>, id: i32) -> String {
     class_names
         .get(&id)
         .cloned()
-        .unwrap_or_else(|| format!("class{}", id))
+        .unwrap_or_else(|| placeholder_class_name(id))
+}
+
+/// Ultralytics-style name for a class ID with no name.
+fn placeholder_class_name(id: i32) -> String {
+    format!("class{}", id)
+}
+
+/// Classify image folder for each class ID, shared by every classify format: the class name
+/// with path separators replaced, plus `_<id>` when it is unsafe or its folder clashes
+/// case-insensitively with a lower class ID's folder.
+pub fn classify_folder_names(data: &NDJSONData) -> HashMap<i32, String> {
+    let class_names = get_class_names(data);
+    let ids: BTreeSet<i32> = (0..get_class_list(data).len() as i32)
+        .chain(
+            data.images
+                .iter()
+                .flat_map(ImageEntry::annotation_class_ids),
+        )
+        .collect();
+    let mut used = HashSet::new();
+
+    ids.into_iter()
+        .map(|id| {
+            let mut folder = class_name(&class_names, id)
+                .chars()
+                .map(|c| match c {
+                    '/' | '\\' | '\0' => '_',
+                    _ => c,
+                })
+                .collect::<String>()
+                .trim()
+                .to_string();
+            if folder.is_empty() {
+                folder = placeholder_class_name(id);
+            }
+            // `.`, `..` and other trailing dots, Windows reserved names, and clashes. Names are
+            // trimmed, so no trailing space is left.
+            while folder.ends_with('.')
+                || crate::is_windows_reserved_segment(&folder)
+                || used.contains(&folder.to_lowercase())
+            {
+                // Windows reserves `CON.anything`, so a reserved name's suffix goes before
+                // its extension.
+                let at = if crate::is_windows_reserved_segment(&folder) {
+                    folder.find('.').unwrap_or(folder.len())
+                } else {
+                    folder.len()
+                };
+                folder.insert_str(at, &format!("_{id}"));
+            }
+            used.insert(folder.to_lowercase());
+            (id, folder)
+        })
+        .collect()
 }
 
 /// Pixel size for converters whose `needs_image_sizes` is true; `resolve_image_sizes`
@@ -166,6 +226,79 @@ mod tests {
             },
             images: vec![],
         }
+    }
+
+    const CLASSIFY_FORMATS: [&str; 3] = ["yolo", "yolo_darknet", "pascal_voc"];
+
+    /// Train folder of each class's single image, by class ID, for one classify format.
+    fn classify_folders(format: &str, names: &[&str]) -> Vec<String> {
+        let mut data = make_metadata_with_classes(
+            names
+                .iter()
+                .enumerate()
+                .map(|(id, name)| (id.to_string(), name.to_string()))
+                .collect(),
+        );
+        data.metadata.task = "classify".to_string();
+        let mut downloaded = HashMap::new();
+        for id in 0..names.len() {
+            let file = format!("img{id}.jpg");
+            downloaded.insert(crate::parser::image_download_key("train", &file), vec![1]);
+            data.images.push(ImageEntry {
+                file,
+                output_file: None,
+                url: String::new(),
+                width: Some(640),
+                height: Some(480),
+                split: "train".to_string(),
+                annotations: Some(json!({ "classification": [id] })),
+            });
+        }
+
+        let files = get_converter(format).unwrap().convert(&data, &downloaded);
+
+        (0..names.len())
+            .map(|id| {
+                let suffix = format!("/img{id}.jpg");
+                let path = files
+                    .keys()
+                    .find(|path| path.ends_with(&suffix))
+                    .unwrap_or_else(|| panic!("{format}: no file for class {id}"));
+                crate::normalize_zip_path(path).unwrap_or_else(|e| panic!("{format}: {e}"));
+                path["train/".len()..path.len() - suffix.len()].to_string()
+            })
+            .collect()
+    }
+
+    fn assert_classify_folders(names: &[&str], expected: &[&str]) {
+        for format in CLASSIFY_FORMATS {
+            assert_eq!(classify_folders(format, names), expected, "{format}");
+        }
+    }
+
+    #[test]
+    fn classify_folders_replace_path_separators() {
+        assert_classify_folders(&["dogs/cats"], &["dogs_cats"]);
+    }
+
+    #[test]
+    fn empty_classify_folders_use_the_placeholder_name() {
+        assert_classify_folders(&["", " "], &["class0", "class1"]);
+    }
+
+    #[test]
+    fn unsafe_classify_folders_get_their_class_id() {
+        assert_classify_folders(&["..", "con"], &[".._0", "con_1"]);
+        assert_classify_folders(
+            &["Con.txt", "a.", ".", "lpt9"],
+            &["Con_0.txt", "a._1", "._2", "lpt9_3"],
+        );
+    }
+
+    #[test]
+    fn clashing_classify_folders_keep_the_name_for_the_lowest_id() {
+        assert_classify_folders(&["a/b", "a_b"], &["a_b", "a_b_1"]);
+        assert_classify_folders(&["Cat", "cat"], &["Cat", "cat_1"]);
     }
 
     #[test]
