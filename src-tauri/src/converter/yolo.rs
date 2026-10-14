@@ -291,7 +291,6 @@ mod tests {
     ) -> NDJSONData {
         NDJSONData {
             metadata: DatasetMetadata {
-                r#type: "dataset".to_string(),
                 task: task.to_string(),
                 name: "test".to_string(),
                 description: String::new(),
@@ -307,7 +306,6 @@ mod tests {
 
     fn image_with_split(split: &str) -> ImageEntry {
         ImageEntry {
-            r#type: "image".to_string(),
             file: format!("{}.jpg", split),
             output_file: None,
             url: String::new(),
@@ -474,7 +472,6 @@ mod tests {
         let mut class_names = HashMap::new();
         class_names.insert("0".to_string(), "dogs/cats".to_string());
         let image = ImageEntry {
-            r#type: "image".to_string(),
             file: "img1.jpg".to_string(),
             output_file: None,
             url: String::new(),
@@ -496,12 +493,40 @@ mod tests {
     }
 
     #[test]
+    fn image_lines_without_type_convert_with_their_labels() {
+        let data = crate::parser::parse_ndjson(
+            r#"{"type":"dataset","task":"detect","name":"untyped","class_names":{"0":"cat","1":"dog"}}
+{"file":"a.jpg","width":640,"height":480,"split":"train","annotations":{"boxes":[[0,0.5,0.5,0.2,0.2]]}}
+{"file":"b.jpg","width":640,"height":480,"split":"val","annotations":{"boxes":[[1,0.25,0.25,0.1,0.1]]}}"#,
+        )
+        .unwrap();
+        assert_eq!(data.images.len(), 2);
+        let downloaded_images = HashMap::from([
+            (image_download_key("train", "a.jpg"), vec![1]),
+            (image_download_key("valid", "b.jpg"), vec![2]),
+        ]);
+
+        let files = YoloConverter::new().convert(&data, &downloaded_images);
+
+        let text = |path: &str| String::from_utf8(files[path].clone()).unwrap();
+        assert_eq!(
+            text("train/labels/a.txt"),
+            "0 0.500000 0.500000 0.200000 0.200000"
+        );
+        assert_eq!(
+            text("valid/labels/b.txt"),
+            "1 0.250000 0.250000 0.100000 0.100000"
+        );
+        assert_eq!(files.get("train/images/a.jpg"), Some(&vec![1]));
+        assert_eq!(files.get("valid/images/b.jpg"), Some(&vec![2]));
+    }
+
+    #[test]
     fn convert_uses_split_aware_download_keys() {
         let mut class_names = HashMap::new();
         class_names.insert("0".to_string(), "animal".to_string());
 
         let train_image = ImageEntry {
-            r#type: "image".to_string(),
             file: "img1.jpg".to_string(),
             output_file: None,
             url: String::new(),
@@ -513,7 +538,6 @@ mod tests {
             })),
         };
         let valid_image = ImageEntry {
-            r#type: "image".to_string(),
             file: "img1.jpg".to_string(),
             output_file: None,
             url: String::new(),
@@ -549,7 +573,6 @@ mod tests {
             None,
             vec![
                 ImageEntry {
-                    r#type: "image".to_string(),
                     file: "Frame_98.jpg".to_string(),
                     output_file: None,
                     url: "https://cdn.example/a.jpg".to_string(),
@@ -561,7 +584,6 @@ mod tests {
                     })),
                 },
                 ImageEntry {
-                    r#type: "image".to_string(),
                     file: "Frame_98.jpg".to_string(),
                     output_file: Some("Frame_98__abcd1234.jpg".to_string()),
                     url: "https://cdn.example/b.jpg".to_string(),
@@ -604,7 +626,6 @@ mod tests {
             class_names,
             Some(vec![2, 2]),
             vec![ImageEntry {
-                r#type: "image".to_string(),
                 file: "object.jpg".to_string(),
                 output_file: None,
                 url: String::new(),
@@ -641,7 +662,6 @@ mod tests {
             HashMap::from([("0".to_string(), "person".to_string())]),
             Some(vec![17, 3]),
             vec![ImageEntry {
-                r#type: "image".to_string(),
                 file: "person.jpg".to_string(),
                 output_file: None,
                 url: String::new(),
@@ -693,7 +713,6 @@ mod tests {
             HashMap::from([("0".to_string(), "object".to_string())]),
             Some(vec![1, 2]),
             vec![ImageEntry {
-                r#type: "image".to_string(),
                 file: "object.jpg".to_string(),
                 output_file: None,
                 url: String::new(),
@@ -721,7 +740,6 @@ mod tests {
             class_names,
             None,
             vec![ImageEntry {
-                r#type: "image".to_string(),
                 file: "street.jpg".to_string(),
                 output_file: None,
                 url: String::new(),
@@ -756,7 +774,6 @@ mod tests {
             class_names,
             None,
             vec![ImageEntry {
-                r#type: "image".to_string(),
                 file: "dental.jpg".to_string(),
                 output_file: None,
                 url: String::new(),

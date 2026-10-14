@@ -361,7 +361,6 @@ mod tests {
     fn convert_uses_split_aware_download_keys() {
         let data = NDJSONData {
             metadata: DatasetMetadata {
-                r#type: "dataset".to_string(),
                 task: "detect".to_string(),
                 name: "test".to_string(),
                 description: String::new(),
@@ -373,7 +372,6 @@ mod tests {
             },
             images: vec![
                 ImageEntry {
-                    r#type: "image".to_string(),
                     file: "img1.jpg".to_string(),
                     output_file: None,
                     url: String::new(),
@@ -385,7 +383,6 @@ mod tests {
                     })),
                 },
                 ImageEntry {
-                    r#type: "image".to_string(),
                     file: "img1.jpg".to_string(),
                     output_file: None,
                     url: String::new(),
@@ -414,7 +411,6 @@ mod tests {
     fn convert_uses_effective_file_name_in_images_and_coco_json() {
         let data = NDJSONData {
             metadata: DatasetMetadata {
-                r#type: "dataset".to_string(),
                 task: "detect".to_string(),
                 name: "test".to_string(),
                 description: String::new(),
@@ -425,7 +421,6 @@ mod tests {
                 version: "1".to_string(),
             },
             images: vec![ImageEntry {
-                r#type: "image".to_string(),
                 file: "img1.jpg".to_string(),
                 output_file: Some("img1__abcd1234.jpg".to_string()),
                 url: String::new(),
@@ -549,7 +544,6 @@ mod tests {
     fn pose_conversion_synthesizes_coco_visibility_for_two_dimensional_keypoints() {
         let data = NDJSONData {
             metadata: DatasetMetadata {
-                r#type: "dataset".to_string(),
                 task: "pose".to_string(),
                 name: "pose".to_string(),
                 description: String::new(),
@@ -560,7 +554,6 @@ mod tests {
                 version: "1".to_string(),
             },
             images: vec![ImageEntry {
-                r#type: "image".to_string(),
                 file: "pose.jpg".to_string(),
                 output_file: None,
                 url: String::new(),
@@ -590,7 +583,6 @@ mod tests {
     fn pose_conversion_preserves_three_dimensional_visibility() {
         let data = NDJSONData {
             metadata: DatasetMetadata {
-                r#type: "dataset".to_string(),
                 task: "pose".to_string(),
                 name: "pose".to_string(),
                 description: String::new(),
@@ -601,7 +593,6 @@ mod tests {
                 version: "1".to_string(),
             },
             images: vec![ImageEntry {
-                r#type: "image".to_string(),
                 file: "pose.jpg".to_string(),
                 output_file: None,
                 url: String::new(),
