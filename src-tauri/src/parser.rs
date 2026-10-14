@@ -72,10 +72,38 @@ pub struct DatasetMetadata {
     pub kpt_shape: Option<Vec<i32>>,
     #[serde(default, deserialize_with = "deserialize_version")]
     pub version: String,
+    /// Depth PNG scale, set by `parse_ndjson` from a depth dataset's `depth_scale`.
+    #[serde(skip, default = "default_depth_scale")]
+    pub depth_scale: f64,
 }
 
 fn default_task() -> String {
     "detect".to_string()
+}
+
+/// Depth PNG scale Ultralytics assumes when a depth dataset declares none.
+fn default_depth_scale() -> f64 {
+    1000.0
+}
+
+/// A depth dataset's `depth_scale`, or the default when absent. Like Ultralytics, anything
+/// but a positive number is rejected; other tasks ignore the key.
+fn depth_scale(
+    task: &str,
+    value: Option<&serde_json::Value>,
+    line: usize,
+) -> Result<f64, ParseError> {
+    match value {
+        Some(value) if task == "depth" => value
+            // JSON numbers are always finite.
+            .as_f64()
+            .filter(|scale| *scale > 0.0)
+            .ok_or_else(|| ParseError::InvalidRecord {
+                line,
+                message: format!("depth_scale must be a positive number, got {value}"),
+            }),
+        _ => Ok(default_depth_scale()),
+    }
 }
 
 fn deserialize_version<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -118,6 +146,9 @@ pub struct ImageEntry {
     pub height: Option<i32>,
     #[serde(default, deserialize_with = "deserialize_split")]
     pub split: String,
+    /// Raw JSON, so only depth datasets reject a malformed value. Read it through `depth_url`.
+    #[serde(default)]
+    pub depth: Option<serde_json::Value>,
     #[serde(default)]
     pub annotations: Option<serde_json::Value>,
 }
@@ -147,9 +178,32 @@ pub fn image_entry_download_key(image: &ImageEntry) -> String {
     image_download_key(&image.split, image.effective_file_name())
 }
 
+/// Name of the depth map paired with an image: Ultralytics looks for its stem plus `.png`.
+pub fn depth_file_name(image_file: &str) -> String {
+    format!("{}.png", output_stem(image_file))
+}
+
+/// Download key of the depth map paired with an image. Its `{split}/depth` pseudo split is
+/// never an image split, so a depth map key never collides with an image key.
+pub fn depth_download_key(split: &str, image_file: &str) -> String {
+    image_download_key(
+        &format!("{}/depth", normalize_split(split)),
+        &depth_file_name(image_file),
+    )
+}
+
 impl ImageEntry {
     pub fn effective_file_name(&self) -> &str {
         self.output_file.as_deref().unwrap_or(&self.file)
+    }
+
+    /// The non-empty `depth.url` string of the depth map paired with this image.
+    pub fn depth_url(&self) -> Option<&str> {
+        self.depth
+            .as_ref()?
+            .get("url")?
+            .as_str()
+            .filter(|url| !url.is_empty())
     }
 
     pub fn size(&self) -> Option<(i32, i32)> {
@@ -559,7 +613,10 @@ pub fn parse_ndjson(content: &str) -> Result<NDJSONData, ParseError> {
             });
         }
     }
-    let metadata: DatasetMetadata = serde_json::from_value(value).map_err(record_error(line))?;
+    let raw_depth_scale = value.get("depth_scale").cloned();
+    let mut metadata: DatasetMetadata =
+        serde_json::from_value(value).map_err(record_error(line))?;
+    metadata.depth_scale = depth_scale(&metadata.task, raw_depth_scale.as_ref(), line)?;
 
     let mut images: Vec<ImageEntry> = Vec::new();
     for (line, text) in records {
@@ -645,6 +702,7 @@ mod tests {
                     width: Some(640),
                     height: Some(480),
                     split: "train".to_string(),
+                    depth: None,
                     annotations: Some(serde_json::json!({ "pose": [row] })),
                 }
             })
@@ -660,6 +718,7 @@ mod tests {
                 class_names: HashMap::from([("0".to_string(), "object".to_string())]),
                 kpt_shape,
                 version: "1".to_string(),
+                depth_scale: 1000.0,
             },
             images,
         }
@@ -964,6 +1023,7 @@ mod tests {
             width: Some(640),
             height: Some(480),
             split: "train".to_string(),
+            depth: None,
             annotations: Some(serde_json::json!({
                 "bboxes": [[0, 0.1, 0.2, 0.3, 0.4], [1, 0.5, 0.6, 0.7, 0.8]]
             })),
@@ -986,6 +1046,7 @@ mod tests {
             width: Some(640),
             height: Some(480),
             split: "train".to_string(),
+            depth: None,
             annotations: Some(serde_json::json!({
                 "boxes": [[2, 0.25, 0.35, 0.45, 0.55]]
             })),
@@ -1008,6 +1069,7 @@ mod tests {
             width: Some(1200),
             height: Some(800),
             split: "train".to_string(),
+            depth: None,
             annotations: Some(serde_json::json!({
                 "pose": [[0, 0.5, 0.6, 0.3, 0.4, 0.1, 0.2, 2, 0.3, 0.4, 1, 0.5, 0.6, 0]]
             })),
@@ -1037,6 +1099,7 @@ mod tests {
             width: Some(640),
             height: Some(480),
             split: "train".to_string(),
+            depth: None,
             annotations: Some(serde_json::json!({
                 "pose": [[0, 0.5, 0.6, 0.3, 0.4, 0.1, 0.2]]
             })),
@@ -1058,6 +1121,7 @@ mod tests {
             width: Some(640),
             height: Some(480),
             split: "val".to_string(),
+            depth: None,
             annotations: None,
         };
 
@@ -1203,6 +1267,7 @@ mod tests {
             width: Some(640),
             height: Some(640),
             split: "train".to_string(),
+            depth: None,
             annotations: Some(serde_json::json!({
                 "obb": [[0, 0.3, 0.6, 0.2, 0.7, 0.25, 0.7, 0.29, 0.63]]
             })),
@@ -1226,6 +1291,7 @@ mod tests {
             width: Some(640),
             height: Some(640),
             split: "train".to_string(),
+            depth: None,
             annotations: Some(serde_json::json!({
                 "obb": [[0, 0.3, 0.6, 0.2, 0.7, 0.25]]
             })),
@@ -1233,5 +1299,49 @@ mod tests {
 
         let obbs = entry.get_obb_annotations();
         assert!(obbs.is_empty());
+    }
+
+    fn depth_dataset(fields: &str) -> Result<NDJSONData, ParseError> {
+        parse_ndjson(&format!(
+            r#"{{"type":"dataset","task":"depth","name":"rooms"{fields}}}"#
+        ))
+    }
+
+    #[test]
+    fn depth_scale_defaults_to_1000_and_keeps_any_positive_number() {
+        for (fields, scale) in [
+            ("", 1000.0),
+            (r#","depth_scale":256"#, 256.0),
+            (r#","depth_scale":0.5"#, 0.5),
+        ] {
+            assert_eq!(
+                depth_dataset(fields).unwrap().metadata.depth_scale,
+                scale,
+                "{fields}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_depth_scale_is_rejected_naming_the_value() {
+        for value in ["0", "-1", "true", r#""1000""#, "null", "[1000]"] {
+            let error = depth_dataset(&format!(r#","depth_scale":{value}"#))
+                .unwrap_err()
+                .to_string();
+
+            assert_eq!(
+                error,
+                format!(
+                    "Invalid record on line 1: depth_scale must be a positive number, got {value}"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn depth_scale_is_ignored_by_other_tasks() {
+        let data = parse_ndjson(r#"{"type":"dataset","task":"detect","depth_scale":true}"#);
+
+        assert!(data.is_ok());
     }
 }

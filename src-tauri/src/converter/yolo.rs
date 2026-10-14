@@ -1,6 +1,11 @@
 use super::{classify_folder_names, get_class_list, Converter};
-use crate::parser::{image_download_key, output_stem, ImageEntry, NDJSONData};
+use crate::parser::{
+    depth_download_key, depth_file_name, image_download_key, output_stem, ImageEntry, NDJSONData,
+};
 use std::collections::HashMap;
+
+/// The single class Ultralytics declares for depth datasets.
+const DEPTH_CLASS_NAME: &str = "depth";
 
 pub struct YoloConverter {
     darknet: bool,
@@ -64,6 +69,14 @@ impl YoloConverter {
 
         for (i, name) in class_names.iter().enumerate() {
             yaml.push_str(&format!("  {}: {}\n", i, quote_yaml_scalar(name)));
+        }
+
+        if task == "depth" {
+            // Display never uses exponent notation, which YAML 1.1 would read as a string.
+            yaml.push_str(&format!(
+                "task: depth\ndepth_scale: {}\n",
+                data.metadata.depth_scale
+            ));
         }
 
         if task == "pose" {
@@ -152,6 +165,10 @@ impl Converter for YoloConverter {
         task == "classify"
     }
 
+    fn pairs_depth_maps(&self, task: &str) -> bool {
+        !self.darknet && task == "depth"
+    }
+
     fn writes_data_yaml(&self, task: &str) -> bool {
         // Darknet has no YAML, and classify datasets are read from their folders.
         !self.darknet && task != "classify"
@@ -164,7 +181,11 @@ impl Converter for YoloConverter {
     ) -> HashMap<String, Vec<u8>> {
         let mut files: HashMap<String, Vec<u8>> = HashMap::new();
         let task = &data.metadata.task;
-        let class_list = get_class_list(data);
+        let class_list = if task == "depth" {
+            vec![DEPTH_CLASS_NAME.to_string()]
+        } else {
+            get_class_list(data)
+        };
         let class_folders = classify_folder_names(data);
 
         if self.darknet {
@@ -230,6 +251,25 @@ impl Converter for YoloConverter {
                         }
                         continue;
                     }
+                    "depth" => {
+                        // No labels: Ultralytics finds the depth map by swapping `images` for `depth`.
+                        let pair = [
+                            (
+                                format!("{}/images/{}", split, image_file),
+                                image_download_key(split, image_file),
+                            ),
+                            (
+                                format!("{}/depth/{}", split, depth_file_name(image_file)),
+                                depth_download_key(split, image_file),
+                            ),
+                        ];
+                        for (path, key) in pair {
+                            if let Some(bytes) = downloaded_images.get(&key) {
+                                files.insert(path, bytes.clone());
+                            }
+                        }
+                        continue;
+                    }
                     _ => self.create_detection_label(img),
                 };
 
@@ -290,6 +330,7 @@ mod tests {
                 class_names,
                 kpt_shape,
                 version: "1".to_string(),
+                depth_scale: 1000.0,
             },
             images,
         }
@@ -303,6 +344,7 @@ mod tests {
             width: Some(640),
             height: Some(480),
             split: split.to_string(),
+            depth: None,
             annotations: Some(json!({
                 "bboxes": [[0, 0.5, 0.5, 0.2, 0.2]]
             })),
@@ -524,6 +566,7 @@ mod tests {
             width: Some(640),
             height: Some(480),
             split: "train".to_string(),
+            depth: None,
             annotations: Some(json!({
                 "bboxes": [[0, 0.5, 0.5, 0.2, 0.2]]
             })),
@@ -535,6 +578,7 @@ mod tests {
             width: Some(640),
             height: Some(480),
             split: "val".to_string(),
+            depth: None,
             annotations: Some(json!({
                 "bboxes": [[0, 0.4, 0.4, 0.3, 0.3]]
             })),
@@ -570,6 +614,7 @@ mod tests {
                     width: Some(640),
                     height: Some(480),
                     split: "train".to_string(),
+                    depth: None,
                     annotations: Some(json!({
                         "boxes": [[0, 0.5, 0.5, 0.2, 0.2]]
                     })),
@@ -581,6 +626,7 @@ mod tests {
                     width: Some(640),
                     height: Some(480),
                     split: "train".to_string(),
+                    depth: None,
                     annotations: Some(json!({
                         "boxes": [[1, 0.4, 0.4, 0.3, 0.3]]
                     })),
@@ -623,6 +669,7 @@ mod tests {
                 width: Some(100),
                 height: Some(100),
                 split: "train".to_string(),
+                depth: None,
                 annotations: Some(json!({
                     "pose": [[0, 0.5, 0.5, 0.8, 0.8, 0.1, 0.2, 0.3, 0.4]]
                 })),
@@ -659,6 +706,7 @@ mod tests {
                 width: Some(100),
                 height: Some(100),
                 split: "train".to_string(),
+                depth: None,
                 annotations: Some(json!({ "pose": [pose_row] })),
             }],
         );
@@ -710,6 +758,7 @@ mod tests {
                 width: Some(100),
                 height: Some(100),
                 split: "train".to_string(),
+                depth: None,
                 annotations: Some(json!({
                     "pose": [[0, 0.5, 0.5, 0.8, 0.8, 0.1, 0.2]]
                 })),
@@ -737,6 +786,7 @@ mod tests {
                 width: Some(640),
                 height: Some(640),
                 split: "train".to_string(),
+                depth: None,
                 annotations: Some(json!({
                     "segments": [[0, 0.1, 0.1, 0.2, 0.1, 0.2, 0.2, 0.1, 0.2]]
                 })),
@@ -771,6 +821,7 @@ mod tests {
                 width: Some(640),
                 height: Some(640),
                 split: "train".to_string(),
+                depth: None,
                 annotations: Some(json!({
                     "obb": [[0, 0.3, 0.6, 0.2, 0.7, 0.25, 0.7, 0.29, 0.63]]
                 })),

@@ -47,7 +47,7 @@
 ## Features
 
 - **12 Output Formats** - YOLO26 through Darknet, COCO JSON, Pascal VOC, TFRecord, CreateML
-- **6 Task Types** - Detection, Segmentation, Semantic Segmentation, Pose Estimation, Classification, OBB
+- **7 Task Types** - Detection, Segmentation, Semantic Segmentation, Pose Estimation, Classification, OBB, Depth Estimation
 - **Parallel Downloads** - 100 concurrent connections for fast image fetching
 - **Privacy-First** - Everything runs locally; your data never leaves your device
 - **Cross-Platform** - macOS, Windows, and Linux
@@ -59,7 +59,7 @@
 
 | Format | Status | Compatible Tasks |
 |--------|:------:|------------------|
-| YOLO26 | ✅ | Detection, Segmentation, Semantic, Pose, Classification, OBB |
+| YOLO26 | ✅ | Detection, Segmentation, Semantic, Pose, Classification, OBB, Depth |
 | YOLOv12 | ✅ | Detection, Segmentation, Pose, Classification, OBB |
 | YOLO11 | ✅ | Detection, Segmentation, Pose, Classification, OBB |
 | YOLOv9 | ✅ | Detection, Segmentation |
@@ -74,7 +74,9 @@
 
 > **Note on Semantic Segmentation:** Semantic datasets are exported as **polygon segmentation labels** (identical in shape to instance-segmentation polygons). Only **YOLO26** trains them *as semantic* (omit `masks_dir` so the loader rasterizes polygons → dense masks). Other YOLO versions and COCO can still use the exported polygons as **instance-segmentation annotations**; Pascal VOC keeps only their bounding boxes.
 
-> **Note on unsupported combinations:** A task the chosen format can't represent (for example COCO + Classification or YOLO Darknet + Segmentation) is rejected before any image downloads, and the error lists the formats that support it. Depth datasets are not supported yet.
+> **Note on Depth Estimation:** Depth datasets export to YOLO only, as RGB images in `{split}/images/` and their 16-bit depth PNGs in `{split}/depth/`. `data.yaml` declares `task: depth` and the dataset's `depth_scale` (default 1000). An image whose depth map fails to download is left out with it.
+
+> **Note on unsupported combinations:** A task the chosen format can't represent (for example COCO + Classification or YOLO Darknet + Segmentation) is rejected before any image downloads, and the error lists the formats that support it.
 
 ---
 
@@ -203,6 +205,7 @@ by both 2 and 3, such as hand-21 or dog-18, because its dimensions cannot be inf
 - [x] Pose Estimation
 - [x] Classification
 - [x] OBB (Oriented Bounding Box)
+- [x] Depth Estimation
 
 ---
 
