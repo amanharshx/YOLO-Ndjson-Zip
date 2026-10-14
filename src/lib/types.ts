@@ -61,6 +61,7 @@ export interface ConvertResult {
   zip_path: string;
   omitted_images: number;
   renamed_images: number;
+  unlabeled_images: number;
   auto_val_split: AutoValSplit | null;
   failure_summary: FailureSummary;
 }

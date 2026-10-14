@@ -355,6 +355,16 @@ export function ConverterScreen({ onBack }: { onBack: () => void }) {
                           : `Renamed ${result.renamed_images} images whose file names clashed within a split.`}
                       </p>
                     )}
+                    {result.unlabeled_images > 0 && (
+                      <p
+                        data-testid="unlabeled-images"
+                        className="mt-3 text-left text-xs text-muted-foreground"
+                      >
+                        {result.unlabeled_images === 1
+                          ? "Skipped 1 unlabeled image because classification exports need a class."
+                          : `Skipped ${result.unlabeled_images} unlabeled images because classification exports need a class.`}
+                      </p>
+                    )}
                     {result.auto_val_split && (
                       <p
                         data-testid="auto-val-split"

@@ -31,6 +31,8 @@ pub struct ConvertResult {
     pub zip_path: String,
     pub omitted_images: usize,
     pub renamed_images: usize,
+    /// Classify images skipped because they have no class ID.
+    pub unlabeled_images: usize,
     pub auto_val_split: Option<AutoValSplit>,
     pub failure_summary: FailureSummary,
 }
@@ -368,6 +370,20 @@ fn prepare_images_with_unique_output_names(images: &[ImageEntry]) -> Vec<ImageEn
     prepared_images
 }
 
+/// Drops the unlabeled images `converter` leaves out, then gives the rest unique output
+/// names, so skipped images are never downloaded or counted as renamed. Returns how many
+/// were dropped.
+fn prepare_export_images(data: &mut NDJSONData, converter: &dyn Converter) -> usize {
+    let original_image_count = data.images.len();
+    if converter.skips_unlabeled_images(&data.metadata.task) {
+        data.images
+            .retain(|image| !image.get_classifications().is_empty());
+    }
+    let unlabeled_images = original_image_count - data.images.len();
+    data.images = prepare_images_with_unique_output_names(&data.images);
+    unlabeled_images
+}
+
 fn filter_images_without_downloads(
     data: &mut NDJSONData,
     downloaded_images: &HashMap<String, Vec<u8>>,
@@ -442,7 +458,7 @@ async fn convert_ndjson(
     check_task_format(&data.metadata.task, &format)?;
     let converter = get_converter(&format).ok_or_else(|| format!("Unknown format: {}", format))?;
     validate_pose_dataset(&mut data).map_err(|e| e.to_string())?;
-    data.images = prepare_images_with_unique_output_names(&data.images);
+    let unlabeled_images = prepare_export_images(&mut data, converter.as_ref());
     let original_image_count = data.images.len();
 
     channel
@@ -589,6 +605,7 @@ async fn convert_ndjson(
         zip_path: output_path.to_string_lossy().to_string(),
         omitted_images,
         renamed_images,
+        unlabeled_images,
         auto_val_split,
         failure_summary,
     })
@@ -610,10 +627,10 @@ pub fn run() {
 mod tests {
     use super::{
         file_name_with_suffix, filter_images_without_downloads, is_ndjson_size_allowed,
-        move_train_images_to_val, normalize_zip_path, prepare_images_with_unique_output_names,
-        resolve_image_sizes, short_stable_hash, val_images_to_move,
-        validate_downloaded_image_count, validate_pose_dataset, validate_semantic_polygons,
-        ConvertErrorKind, MAX_NDJSON_BYTES,
+        move_train_images_to_val, normalize_zip_path, prepare_export_images,
+        prepare_images_with_unique_output_names, resolve_image_sizes, short_stable_hash,
+        val_images_to_move, validate_downloaded_image_count, validate_pose_dataset,
+        validate_semantic_polygons, ConvertErrorKind, MAX_NDJSON_BYTES,
     };
     use crate::converter::{get_class_list, get_converter};
     use crate::downloader::{FailureGroup, FailureKind, FailureSummary};
@@ -1514,6 +1531,79 @@ mod tests {
                 "{task} + {format}"
             );
         }
+    }
+
+    fn pets(image_lines: &[&str]) -> crate::parser::NDJSONData {
+        let header =
+            r#"{"type":"dataset","task":"classify","name":"pets","class_names":{"0":"cat"}}"#;
+        parse_ndjson(&[&[header], image_lines].concat().join("\n")).unwrap()
+    }
+
+    #[test]
+    fn unlabeled_classify_images_are_skipped_and_counted() {
+        for unlabeled in [
+            r#"{"file":"b.jpg","split":"train","url":"https://cdn.example/b.jpg"}"#,
+            r#"{"file":"b.jpg","split":"train","url":"https://cdn.example/b.jpg","annotations":{"classification":[]}}"#,
+        ] {
+            for format in ["yolo", "yolo_darknet", "pascal_voc"] {
+                let mut data = pets(&[
+                    r#"{"file":"a.jpg","split":"train","url":"https://cdn.example/a.jpg","annotations":{"classification":[0]}}"#,
+                    unlabeled,
+                ]);
+                let downloaded = all_downloaded(&data);
+                let converter = get_converter(format).unwrap();
+
+                assert_eq!(
+                    prepare_export_images(&mut data, converter.as_ref()),
+                    1,
+                    "{format}: {unlabeled}"
+                );
+
+                let files = converter.convert(&data, &downloaded);
+                assert_eq!(
+                    paths_under(&files, "train/"),
+                    ["train/cat/a.jpg"],
+                    "{format}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn skipped_unlabeled_image_is_not_counted_as_renamed() {
+        let labeled = r#"{"file":"a.jpg","split":"train","url":"https://cdn.example/a.jpg","annotations":{"classification":[0]}}"#;
+        let unlabeled = r#"{"file":"a.png","split":"train","url":"https://cdn.example/a.png"}"#;
+        let converter = get_converter("yolo").unwrap();
+        for lines in [[labeled, unlabeled], [unlabeled, labeled]] {
+            let mut data = pets(&lines);
+
+            prepare_export_images(&mut data, converter.as_ref());
+
+            assert_eq!(data.images.len(), 1);
+            assert_eq!(data.images[0].file, "a.jpg");
+            // `renamed_images` counts the images with an `output_file`.
+            assert_eq!(data.images[0].output_file, None);
+        }
+    }
+
+    #[test]
+    fn unlabeled_images_are_kept_by_other_tasks_and_createml() {
+        let mut detect = parse_ndjson(
+            r#"{"type":"dataset","task":"detect","name":"background"}
+{"file":"empty.jpg","width":64,"height":64,"split":"train"}"#,
+        )
+        .unwrap();
+        let yolo = get_converter("yolo").unwrap();
+        assert_eq!(prepare_export_images(&mut detect, yolo.as_ref()), 0);
+        assert_eq!(detect.images.len(), 1);
+
+        let mut classify =
+            pets(&[r#"{"file":"b.jpg","split":"train","url":"https://cdn.example/b.jpg"}"#]);
+        let downloaded = all_downloaded(&classify);
+        let createml = get_converter("createml").unwrap();
+        assert_eq!(prepare_export_images(&mut classify, createml.as_ref()), 0);
+        let files = createml.convert(&classify, &downloaded);
+        assert!(files.contains_key("train/b.jpg"));
     }
 
     #[test]

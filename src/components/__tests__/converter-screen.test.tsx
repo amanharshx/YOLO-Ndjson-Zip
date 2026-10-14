@@ -175,6 +175,7 @@ describe("ConverterScreen success card", () => {
   function renderSuccess(
     renamedImages: number,
     autoValSplit: AutoValSplit | null = null,
+    unlabeledImages = 0,
   ) {
     useConverterMock.mockReturnValue({
       selectedFile: "/tmp/dataset.ndjson",
@@ -187,6 +188,7 @@ describe("ConverterScreen success card", () => {
         zip_path: "/tmp/dataset.zip",
         omitted_images: 0,
         renamed_images: renamedImages,
+        unlabeled_images: unlabeledImages,
         auto_val_split: autoValSplit,
         failure_summary: { groups: [], expiry: null },
       },
@@ -241,5 +243,29 @@ describe("ConverterScreen success card", () => {
 
     expect(screen.getByTestId("success-card")).toBeInTheDocument();
     expect(screen.queryByTestId("auto-val-split")).not.toBeInTheDocument();
+  });
+
+  it("reports skipped unlabeled images without a rename notice", () => {
+    renderSuccess(0, null, 1);
+
+    expect(screen.getByTestId("unlabeled-images")).toHaveTextContent(
+      "Skipped 1 unlabeled image because classification exports need a class.",
+    );
+    expect(screen.queryByTestId("renamed-images")).not.toBeInTheDocument();
+  });
+
+  it("uses the plural for several unlabeled images", () => {
+    renderSuccess(0, null, 3);
+
+    expect(screen.getByTestId("unlabeled-images")).toHaveTextContent(
+      "Skipped 3 unlabeled images because classification exports need a class.",
+    );
+  });
+
+  it("hides the unlabeled notice when every image had a class", () => {
+    renderSuccess(0);
+
+    expect(screen.getByTestId("success-card")).toBeInTheDocument();
+    expect(screen.queryByTestId("unlabeled-images")).not.toBeInTheDocument();
   });
 });
